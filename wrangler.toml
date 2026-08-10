@@ -1,0 +1,18 @@
+name = "puratech-api"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# D1 Database
+[[d1_databases]]
+binding = "DB"
+database_name = "puratech-store-db"
+database_id = "83353a6a-1b91-47b2-a463-274d5ef9f270"
+
+# R2 Bucket for images (commented out until R2 is enabled)
+# [[r2_buckets]]
+# binding = "IMAGES"
+# bucket_name = "puratech-store-images"
+
+# CORS headers
+[vars]
+ALLOWED_ORIGINS = "*"
