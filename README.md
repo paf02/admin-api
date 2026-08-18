@@ -4,7 +4,7 @@ Cloudflare Workers-based REST API for PuraTech Store inventory and sales managem
 
 ## 🚀 Live API
 
-**Production:** https://puratech-store-api.puratechtest01.workers.dev
+**Production:** https://store-platform-api.puratechtest01.workers.dev
 
 ## 🛠️ Tech Stack
 
@@ -61,7 +61,7 @@ npm run deploy
 ### Create D1 Database
 
 ```bash
-wrangler d1 create puratech-store-db
+wrangler d1 create store-platform-db
 ```
 
 Update `wrangler.toml` with the database ID.
@@ -70,16 +70,16 @@ Update `wrangler.toml` with the database ID.
 
 ```bash
 # Create tables
-wrangler d1 execute puratech-store-db --remote --file=../database/schema.sql
+wrangler d1 execute store-platform-db --remote --file=../database/schema.sql
 
 # Seed initial data
-wrangler d1 execute puratech-store-db --remote --file=../database/seed.sql
+wrangler d1 execute store-platform-db --remote --file=../database/seed.sql
 
 # Add users table
-wrangler d1 execute puratech-store-db --remote --file=../database/migration-add-users.sql
+wrangler d1 execute store-platform-db --remote --file=../database/migration-add-users.sql
 
 # Seed admin user
-wrangler d1 execute puratech-store-db --remote --file=../database/seed-users.sql
+wrangler d1 execute store-platform-db --remote --file=../database/seed-users.sql
 ```
 
 ## 📡 API Endpoints
@@ -218,14 +218,14 @@ See `../database/schema.sql` for full schema.
 ### wrangler.toml
 
 ```toml
-name = "puratech-store-api"
+name = "store-platform-api"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "puratech-store-db"
-database_id = "83353a6a-1b91-47b2-a463-274d5ef9f270"
+database_name = "store-platform-db"
+database_id = "a8b78cf5-63e1-4879-aa91-3eaf42a618b0"
 
 [vars]
 ALLOWED_ORIGINS = "*"
@@ -254,19 +254,19 @@ See [CICD_SETUP.md](../CICD_SETUP.md) for detailed setup.
 ### Health Check
 
 ```bash
-curl https://puratech-store-api.puratechtest01.workers.dev/
+curl https://store-platform-api.puratechtest01.workers.dev/
 ```
 
 ### Get Products
 
 ```bash
-curl https://puratech-store-api.puratechtest01.workers.dev/api/productos
+curl https://store-platform-api.puratechtest01.workers.dev/api/productos
 ```
 
 ### Login
 
 ```bash
-curl -X POST https://puratech-store-api.puratechtest01.workers.dev/api/auth/login \
+curl -X POST https://store-platform-api.puratechtest01.workers.dev/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"josedavid","password":"sUU222s&"}'
 ```
@@ -277,11 +277,11 @@ curl -X POST https://puratech-store-api.puratechtest01.workers.dev/api/auth/logi
 
 ```bash
 # List products
-wrangler d1 execute puratech-store-db --remote \
+wrangler d1 execute store-platform-db --remote \
   --command="SELECT * FROM Productos LIMIT 5"
 
 # Get sales stats
-wrangler d1 execute puratech-store-db --remote \
+wrangler d1 execute store-platform-db --remote \
   --command="SELECT COUNT(*) as total FROM Ventas"
 ```
 
