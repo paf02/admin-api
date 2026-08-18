@@ -1,12 +1,12 @@
-name = "puratech-api"
+name = "store-platform-api"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
 
 # D1 Database
 [[d1_databases]]
 binding = "DB"
-database_name = "puratech-store-db"
-database_id = "83353a6a-1b91-47b2-a463-274d5ef9f270"
+database_name = "store-platform-db"
+database_id = "a8b78cf5-63e1-4879-aa91-3eaf42a618b0"
 
 # R2 Bucket for images (commented out until R2 is enabled)
 # [[r2_buckets]]

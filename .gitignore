@@ -4,3 +4,7 @@ dist/
 .env
 .dev.vars
 *.log
+
+# D1 exports contain live data, including Users password hashes
+schema-backup.sql
+*-backup.sql
