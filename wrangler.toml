@@ -16,3 +16,17 @@ database_id = "a8b78cf5-63e1-4879-aa91-3eaf42a618b0"
 # CORS headers
 [vars]
 ALLOWED_ORIGINS = "*"
+
+# Estela Pura runs the same code against its own database, so the two
+# storefronts can never see each other's products.
+#   deploy with: npx wrangler deploy --env estelapura
+[env.estelapura]
+name = "estelapura-api"
+
+[env.estelapura.vars]
+ALLOWED_ORIGINS = "*"
+
+[[env.estelapura.d1_databases]]
+binding = "DB"
+database_name = "estelapura-db"
+database_id = "727f8ddc-a5c3-4d33-96e3-3e8d381d34ec"
