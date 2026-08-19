@@ -32,7 +32,12 @@ function secretKey(secret?: string): Uint8Array {
  * formato nuevo. Nadie tiene que cambiar su contraseña por esto.
  */
 
-const ITERACIONES = 150_000;
+/*
+ * 100 000 iteraciones: el máximo que admite WebCrypto en Workers. Con más,
+ * `deriveBits` lanza en producción aunque funcione perfecto en local, y el
+ * login empieza a rechazar contraseñas correctas sin decir por qué.
+ */
+const ITERACIONES = 100_000;
 
 const aBase64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
 const deBase64 = (texto: string) =>
@@ -96,7 +101,11 @@ export async function verifyPasswordDetallado(
     try {
       const calculado = await derivar(password, deBase64(sal), Number(iteraciones));
       return { valido: iguales(calculado, deBase64(hash)), necesitaActualizar: false };
-    } catch {
+    } catch (error: any) {
+      // Se registra: un hash ilegible o un límite de la plataforma no puede
+      // quedar como «contraseña incorrecta» sin rastro, que fue justo lo que
+      // hizo perder una tarde.
+      console.error('auth.pbkdf2', error?.message);
       return { valido: false, necesitaActualizar: false };
     }
   }
