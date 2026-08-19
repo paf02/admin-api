@@ -46,6 +46,14 @@ ALLOWED_ORIGINS = "*"
 VAPID_PUBLIC_KEY = "BAgUHBY32zP6oCH7x81Bte_qlaNI1FJlM7xZp2DFZLc2JCtoB5P5_RidY4iKI8vdhKCnoYYnKE8lc3McYRx1Txs"
 VAPID_SUBJECT = "mailto:pedidos@estelapuracr.com"
 
+# Respaldo diario a la 1:00 a. m. de Costa Rica (07:00 UTC)
+[env.estelapura.triggers]
+crons = ["0 7 * * *"]
+
+[[env.estelapura.r2_buckets]]
+binding = "RESPALDOS"
+bucket_name = "estelapura-respaldos"
+
 [[env.estelapura.d1_databases]]
 binding = "DB"
 database_name = "estelapura-db"

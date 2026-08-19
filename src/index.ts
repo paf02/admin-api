@@ -9,6 +9,9 @@ import { dashboardRouter } from './routes/dashboard';
 import { inventarioRouter } from './routes/inventario';
 import { pushRouter } from './routes/push';
 import { whatsappRouter } from './routes/whatsapp';
+import { expireUnverifiedSinpe } from './lib/expireOrders';
+import { respaldosRouter } from './routes/respaldos';
+import { guardarRespaldo } from './lib/respaldo';
 
 type Bindings = {
   DB: D1Database;
@@ -43,5 +46,18 @@ app.route('/api/dashboard', dashboardRouter);
 app.route('/api/inventario', inventarioRouter);
 app.route('/api/push', pushRouter);
 app.route('/api/whatsapp', whatsappRouter);
+app.route('/api/respaldos', respaldosRouter);
 
-export default app;
+/**
+ * El Worker atiende peticiones y, una vez al día, saca el respaldo.
+ *
+ * `scheduled` corre por el cron configurado en wrangler.toml. Si el respaldo
+ * falla queda en el log y se vuelve a intentar al día siguiente: nada de esto
+ * afecta a la tienda ni al panel.
+ */
+export default {
+  fetch: app.fetch,
+  async scheduled(_evento: ScheduledEvent, env: any, ctx: ExecutionContext) {
+    ctx.waitUntil(guardarRespaldo(env, 'programado'));
+  },
+};
