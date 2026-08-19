@@ -96,7 +96,8 @@ productsRouter.delete('/:id', authMiddleware, adminMiddleware, async (c) => {
 });
 
 // Get low stock products
-productsRouter.get('/stock/bajo', async (c) => {
+// Cuánto queda de qué es información del negocio, no de la vitrina
+productsRouter.get('/stock/bajo', authMiddleware, adminMiddleware, async (c) => {
   const { results } = await c.env.DB.prepare(`
     SELECT 
       p.*,

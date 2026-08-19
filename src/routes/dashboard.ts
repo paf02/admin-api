@@ -69,7 +69,7 @@ dashboardRouter.get('/stats', authMiddleware, adminMiddleware, async (c) => {
 });
 
 // Get monthly sales chart data
-dashboardRouter.get('/ventas-mensuales', async (c) => {
+dashboardRouter.get('/ventas-mensuales', authMiddleware, adminMiddleware, async (c) => {
   const { results } = await c.env.DB.prepare(`
     SELECT 
       strftime('%Y-%m', Fecha) as mes,
@@ -85,7 +85,14 @@ dashboardRouter.get('/ventas-mensuales', async (c) => {
 });
 
 // Get recent sales
-dashboardRouter.get('/ventas-recientes', async (c) => {
+/**
+ * Últimas ventas.
+ *
+ * Devuelve filas completas de Ventas —nombre, teléfono, correo y dirección de
+ * quien compró—, así que exige sesión de administrador. Estuvo abierta por
+ * error: cualquiera con la URL podía leer los datos de los clientes.
+ */
+dashboardRouter.get('/ventas-recientes', authMiddleware, adminMiddleware, async (c) => {
   const { results } = await c.env.DB.prepare(`
     SELECT * FROM Ventas 
     ORDER BY Fecha DESC 
@@ -96,7 +103,7 @@ dashboardRouter.get('/ventas-recientes', async (c) => {
 });
 
 // Get best selling products
-dashboardRouter.get('/productos-populares', async (c) => {
+dashboardRouter.get('/productos-populares', authMiddleware, adminMiddleware, async (c) => {
   const { results } = await c.env.DB.prepare(`
     SELECT 
       p.ProductoID,

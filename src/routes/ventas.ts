@@ -10,6 +10,7 @@ import {
   PAYMENT_METHODS,
 } from '../lib/orders';
 import { buildOrderCreated, publish } from '../lib/events';
+import { shippingFor } from '../lib/shipping';
 import {
   deductStatement,
   movementStatement,
@@ -237,10 +238,13 @@ ventasRouter.post('/', async (c) => {
     );
   }
 
-  // Ambos métodos de entrega cotizan al coordinar, así que no se acepta un
-  // monto arbitrario: o viene por confirmar, o es un número >= 0.
-  const envioPorConfirmar = body.EnvioPorConfirmar ? 1 : 0;
-  const costoEnvio = envioPorConfirmar ? 0 : Math.max(0, Number(body.CostoEnvio) || 0);
+  // El envío se calcula acá, no se acepta del cuerpo: es un cobro, y un
+  // navegador que mandara CostoEnvio = 0 dejaría el pedido sin el envío que
+  // igual hay que pagar. Método desconocido = por confirmar, sin inventar
+  // tarifa ni rechazar la compra.
+  const envio = shippingFor(body.MetodoEntrega, subtotal);
+  const envioPorConfirmar = envio === null ? 1 : 0;
+  const costoEnvio = envio ?? 0;
   const total = subtotal + costoEnvio;
 
   // Primero se apartan las existencias, después se crea el pedido.
