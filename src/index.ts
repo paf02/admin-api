@@ -14,6 +14,9 @@ import { respaldosRouter } from './routes/respaldos';
 import { reportesRouter } from './routes/reportes';
 import { guardarRespaldo } from './lib/respaldo';
 
+/** Cron del respaldo diario; el resto de crons solo corren la caducidad. */
+const RESPALDO_CRON = '0 7 * * *';
+
 type Bindings = {
   DB: D1Database;
   // IMAGES: R2Bucket; // Uncomment when R2 is enabled
@@ -59,7 +62,22 @@ app.route('/api/reportes', reportesRouter);
  */
 export default {
   fetch: app.fetch,
-  async scheduled(_evento: ScheduledEvent, env: any, ctx: ExecutionContext) {
-    ctx.waitUntil(guardarRespaldo(env, 'programado'));
+  async scheduled(evento: ScheduledEvent, env: any, ctx: ExecutionContext) {
+    // El respaldo es diario; su cron es el de las 07:00 UTC.
+    if (evento.cron === RESPALDO_CRON) {
+      ctx.waitUntil(guardarRespaldo(env, 'programado'));
+    }
+
+    // La caducidad corre cada hora: las existencias de un SINPE abandonado
+    // deben volver a la tienda sin esperar al respaldo del día siguiente.
+    ctx.waitUntil(
+      expireUnverifiedSinpe(env.DB)
+        .then((r) => {
+          if (r.revisados > 0) console.log('expire.sinpe', JSON.stringify(r));
+        })
+        // Nunca se relanza: que falle la caducidad no puede tumbar el respaldo
+        // ni marcar el Worker como caído.
+        .catch((error: any) => console.error('expire.sinpe.error', error?.message))
+    );
   },
 };

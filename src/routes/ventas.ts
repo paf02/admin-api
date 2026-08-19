@@ -152,6 +152,68 @@ ventasRouter.get('/:id', ...admin, async (c) => {
   return c.json({ success: true, data: { ...venta, detalles, historial } });
 });
 
+/**
+ * Qué más compró esta persona.
+ *
+ * Se la reconoce por teléfono o correo —lo único que la tienda pide— y se
+ * comparan normalizados, porque el mismo número se escribe de cinco formas
+ * («8888 8888», «8888-8888», «+506 88888888»).
+ *
+ * El total gastado deja fuera los pedidos cancelados: no se cobraron. Los
+ * cancelados sí aparecen en la lista, marcados, porque saber que alguien
+ * cancela seguido también es información.
+ */
+ventasRouter.get('/:id/cliente', ...admin, async (c) => {
+  const id = c.req.param('id');
+
+  try {
+    const venta: any = await c.env.DB.prepare(
+      `SELECT VentaID, Cliente, Telefono, Email FROM Ventas WHERE VentaID = ?`
+    ).bind(id).first();
+
+    if (!venta) return c.json({ success: false, message: 'Pedido no encontrado' }, 404);
+
+    // Solo dígitos: así «8888-8888» y «+506 8888 8888» son el mismo cliente
+    const telefono = String(venta.Telefono ?? '').replace(/\D/g, '').slice(-8);
+    const email = String(venta.Email ?? '').trim().toLowerCase();
+
+    if (!telefono && !email) {
+      return c.json({
+        success: true,
+        data: { identificadoPor: null, pedidos: 0, total: 0, anteriores: [] },
+      });
+    }
+
+    const { results: anteriores } = await c.env.DB.prepare(
+      `SELECT VentaID, NumeroPedido, Fecha, Total, EstadoVenta, EstadoPago
+         FROM Ventas
+        WHERE VentaID <> ?
+          AND (
+            (? <> '' AND substr(replace(replace(replace(replace(COALESCE(Telefono,''),' ',''),'-',''),'+',''),'(',''), -8) = ?)
+            OR (? <> '' AND lower(COALESCE(Email,'')) = ?)
+          )
+        ORDER BY VentaID DESC
+        LIMIT 25`
+    ).bind(id, telefono, telefono, email, email).all();
+
+    const validos = (anteriores as any[]).filter((v) => v.EstadoVenta !== 'Cancelado');
+
+    return c.json({
+      success: true,
+      data: {
+        identificadoPor: telefono ? 'teléfono' : 'correo',
+        pedidos: validos.length,
+        cancelados: anteriores.length - validos.length,
+        total: validos.reduce((suma, v) => suma + (Number(v.Total) || 0), 0),
+        anteriores,
+      },
+    });
+  } catch (error: any) {
+    console.error('ventas.cliente', error?.message);
+    return c.json({ success: false, message: 'No se pudo cargar el historial del cliente' }, 500);
+  }
+});
+
 /* ------------------------------------------------------------------ *
  * Creación (tienda pública)
  * ------------------------------------------------------------------ */

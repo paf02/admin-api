@@ -48,7 +48,8 @@ VAPID_SUBJECT = "mailto:pedidos@estelapuracr.com"
 
 # Respaldo diario a la 1:00 a. m. de Costa Rica (07:00 UTC)
 [env.estelapura.triggers]
-crons = ["0 7 * * *"]
+# 07:00 UTC = respaldo diario · cada hora = caducidad de SINPE sin verificar
+crons = ["0 7 * * *", "0 * * * *"]
 
 [[env.estelapura.r2_buckets]]
 binding = "RESPALDOS"
