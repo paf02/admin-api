@@ -11,6 +11,7 @@ import { pushRouter } from './routes/push';
 import { whatsappRouter } from './routes/whatsapp';
 import { expireUnverifiedSinpe } from './lib/expireOrders';
 import { respaldosRouter } from './routes/respaldos';
+import { reportesRouter } from './routes/reportes';
 import { guardarRespaldo } from './lib/respaldo';
 
 type Bindings = {
@@ -47,6 +48,7 @@ app.route('/api/inventario', inventarioRouter);
 app.route('/api/push', pushRouter);
 app.route('/api/whatsapp', whatsappRouter);
 app.route('/api/respaldos', respaldosRouter);
+app.route('/api/reportes', reportesRouter);
 
 /**
  * El Worker atiende peticiones y, una vez al día, saca el respaldo.
