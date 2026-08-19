@@ -1,7 +1,20 @@
 import { SignJWT, jwtVerify } from 'jose';
 
-// Secret key for JWT signing (in production, store in wrangler secrets)
-const JWT_SECRET = 'puratech-store-secret-key-change-in-production-2024';
+/**
+ * La llave de firma llega por `wrangler secret put JWT_SECRET`, nunca en el
+ * código: este repositorio es público, y una llave versionada permite a
+ * cualquiera firmarse un token de administrador y leer los pedidos de los
+ * clientes (nombre, teléfono, dirección).
+ *
+ * Si falta el secreto se falla cerrado: preferimos que nadie entre a que
+ * todos entren con una llave conocida.
+ */
+function secretKey(secret?: string): Uint8Array {
+  if (!secret) {
+    throw new Error('JWT_SECRET no está configurado en el Worker');
+  }
+  return new TextEncoder().encode(secret);
+}
 
 /**
  * Hash password using SHA-256
@@ -26,8 +39,8 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 /**
  * Generate JWT token with proper signing
  */
-export async function generateToken(userId: number, username: string, role: string = 'user'): Promise<string> {
-  const secret = new TextEncoder().encode(JWT_SECRET);
+export async function generateToken(userId: number, username: string, role: string = 'user', jwtSecret?: string): Promise<string> {
+  const secret = secretKey(jwtSecret);
 
   const token = await new SignJWT({
     userId,
@@ -47,9 +60,9 @@ export async function generateToken(userId: number, username: string, role: stri
 /**
  * Verify and decode JWT token
  */
-export async function verifyToken(token: string): Promise<{ userId: number; username: string; role: string } | null> {
+export async function verifyToken(token: string, jwtSecret?: string): Promise<{ userId: number; username: string; role: string } | null> {
   try {
-    const secret = new TextEncoder().encode(JWT_SECRET);
+    const secret = secretKey(jwtSecret);
 
     const { payload } = await jwtVerify(token, secret, {
       issuer: 'puratech-store-api',

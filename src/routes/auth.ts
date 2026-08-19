@@ -3,6 +3,7 @@ import { verifyPassword, generateToken, verifyToken } from '../utils/crypto';
 
 type Bindings = {
   DB: D1Database;
+  JWT_SECRET: string;
 };
 
 export const authRouter = new Hono<{ Bindings: Bindings }>();
@@ -43,7 +44,8 @@ authRouter.post('/login', async (c) => {
     const token = await generateToken(
       user.UserID as number,
       user.Username as string,
-      user.Role as string
+      user.Role as string,
+      c.env.JWT_SECRET
     );
 
     return c.json({
@@ -73,7 +75,7 @@ authRouter.get('/verify', async (c) => {
   }
 
   const token = authHeader.substring(7);
-  const payload = await verifyToken(token);
+  const payload = await verifyToken(token, c.env.JWT_SECRET);
 
   if (!payload) {
     return c.json({ success: false, message: 'Token inválido o expirado' }, 401);

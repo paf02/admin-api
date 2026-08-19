@@ -13,7 +13,7 @@ export async function authMiddleware(c: Context, next: Next) {
     return c.json({ success: false, message: 'No token provided' }, 401);
   }
 
-  const user = await verifyToken(token);
+  const user = await verifyToken(token, (c.env as any).JWT_SECRET);
 
   if (!user) {
     return c.json({ success: false, message: 'Invalid or expired token' }, 401);
@@ -48,7 +48,7 @@ export async function optionalAuthMiddleware(c: Context, next: Next) {
   const token = extractToken(authHeader);
 
   if (token) {
-    const user = await verifyToken(token);
+    const user = await verifyToken(token, (c.env as any).JWT_SECRET);
     if (user) {
       c.set('user', user);
     }
