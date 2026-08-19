@@ -8,6 +8,7 @@ import { ventasRouter } from './routes/ventas';
 import { dashboardRouter } from './routes/dashboard';
 import { inventarioRouter } from './routes/inventario';
 import { pushRouter } from './routes/push';
+import { whatsappRouter } from './routes/whatsapp';
 
 type Bindings = {
   DB: D1Database;
@@ -41,5 +42,6 @@ app.route('/api/ventas', ventasRouter);
 app.route('/api/dashboard', dashboardRouter);
 app.route('/api/inventario', inventarioRouter);
 app.route('/api/push', pushRouter);
+app.route('/api/whatsapp', whatsappRouter);
 
 export default app;

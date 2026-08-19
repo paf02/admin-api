@@ -29,6 +29,20 @@ ALLOWED_ORIGINS = "*"
 # Avisos de pedidos al panel (Web Push).
 # La clave pública y el contacto son públicos por definición; la clave privada
 # va como secret:  npx wrangler secret put VAPID_PRIVATE_KEY --env estelapura
+
+# ── WhatsApp Cloud API ────────────────────────────────────────────────
+# El número emisor NO se escribe acá ni en el código: se identifica por su ID.
+# Hoy apunta al número de prueba que da Meta; el día que la tienda tenga su
+# propio número, se cambia este ID y nada más.
+#
+# Valores públicos van como vars; los secretos, con `wrangler secret put`:
+#   npx wrangler secret put WHATSAPP_ACCESS_TOKEN --env estelapura
+#   npx wrangler secret put WHATSAPP_APP_SECRET   --env estelapura
+#   npx wrangler secret put WHATSAPP_VERIFY_TOKEN --env estelapura
+#
+# WHATSAPP_PHONE_NUMBER_ID     = "…"   # ID del número emisor (no el número)
+# WHATSAPP_BUSINESS_ACCOUNT_ID = "…"   # WABA a la que pertenece
+
 VAPID_PUBLIC_KEY = "BAgUHBY32zP6oCH7x81Bte_qlaNI1FJlM7xZp2DFZLc2JCtoB5P5_RidY4iKI8vdhKCnoYYnKE8lc3McYRx1Txs"
 VAPID_SUBJECT = "mailto:pedidos@estelapuracr.com"
 

@@ -344,3 +344,62 @@ Private - PuraTech Store
 ---
 
 **For CI/CD setup and deployment guide, see:** [CICD_SETUP.md](../CICD_SETUP.md)
+
+## Pedidos por WhatsApp (Cloud API)
+
+Un mensaje de WhatsApp entra por el webhook, se lee contra el catálogo y queda
+como **borrador** en el panel. No es una venta: el pedido real lo crea una
+persona desde el panel con la ruta de siempre (`POST /api/ventas`), que es la
+única que valida existencias y descuenta stock.
+
+```
+Número de prueba de Meta → webhook → borrador → aviso al panel → pedido
+```
+
+### El número emisor nunca está en el código
+
+El bot no conoce ningún número de teléfono: manda mensajes a través de un
+`WHATSAPP_PHONE_NUMBER_ID`. Hoy ese ID es el del **número de prueba que
+regala Meta**; cuando la tienda compre su propio número, se cambia el ID (y
+el token) y el bot sigue igual. El número personal del dueño se usa solo como
+**destinatario** de prueba: se agrega en la lista de números permitidos de la
+app de Meta, no se registra como número de negocio.
+
+### Variables
+
+| Variable | Qué es | Dónde va |
+|---|---|---|
+| `WHATSAPP_PHONE_NUMBER_ID` | ID del número emisor | var |
+| `WHATSAPP_BUSINESS_ACCOUNT_ID` | Cuenta de WhatsApp Business (WABA) | var |
+| `WHATSAPP_ACCESS_TOKEN` | Token de la app de Meta | secret |
+| `WHATSAPP_VERIFY_TOKEN` | Cadena que Meta repite al dar de alta el webhook | secret |
+| `WHATSAPP_APP_SECRET` | Secreto de la app, para validar la firma de cada webhook | secret |
+| `WHATSAPP_API_BASE` | Base de la API; solo se cambia para probar en local | var (opcional) |
+
+Sin token ni número configurados el webhook sigue recibiendo y guardando
+borradores, pero no responde: queda anotado en el log y el panel lo avisa.
+
+La URL del webhook es pública, así que **la firma es obligatoria**: sin
+`WHATSAPP_APP_SECRET` configurado el webhook responde 503, y una firma que no
+cuadra responde 401. Para desarrollo local se puede poner
+`WHATSAPP_ALLOW_UNSIGNED=1` en `.dev.vars`; en producción, nunca.
+
+### Alta del webhook en Meta
+
+1. En la app de Meta → WhatsApp → Configuration, poner como URL de callback:
+   `https://estelapura-api.puratechtest01.workers.dev/api/whatsapp/webhook`
+2. En «Verify token», pegar el mismo valor que tenga `WHATSAPP_VERIFY_TOKEN`.
+3. Suscribir el campo **messages**.
+4. En «API Setup», agregar el número de prueba propio (el personal) como
+   destinatario permitido para poder conversar con el bot.
+
+### Qué hace el bot
+
+- Lee el mensaje y busca productos **del catálogo**: nombre, marca y tamaño.
+  Distingue el frasco completo del decant por los ml del mensaje.
+- Entiende cantidades escritas con dígitos o con palabras («dos yara 5ml»).
+- Responde confirmando lo que entendió y **sin prometer nada**: no asegura
+  existencias ni tiempos, y aclara que una persona confirma.
+- Lo que no reconoce queda anotado en el borrador para que se resuelva a mano.
+- Un reintento de Meta no genera un segundo borrador: los IDs de mensaje ya
+  procesados se guardan.

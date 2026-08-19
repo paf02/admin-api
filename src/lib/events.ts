@@ -33,6 +33,19 @@ export type NotifyEnv = VapidEnv & {
   WHATSAPP_TEMPLATE_LANG?: string;
 };
 
+export type DraftCreatedEvent = {
+  type: 'draft.created';
+  occurredAt: string;
+  data: {
+    draftId: number;
+    channel: string;
+    contactName: string | null;
+    itemCount: number;
+    total: number;
+    intent: string;
+  };
+};
+
 export type OrderCreatedEvent = {
   type: 'order.created';
   occurredAt: string;
@@ -54,6 +67,10 @@ export function buildOrderCreated(data: OrderCreatedEvent['data']): OrderCreated
     occurredAt: new Date().toISOString(),
     data,
   };
+}
+
+export function buildDraftCreated(data: DraftCreatedEvent['data']): DraftCreatedEvent {
+  return { type: 'draft.created', occurredAt: new Date().toISOString(), data };
 }
 
 const colones = (monto: number) => `₡${Math.round(monto).toLocaleString('es-CR')}`;
@@ -102,7 +119,11 @@ export const canNotify = (env: NotifyEnv) =>
  * Las suscripciones que el servicio da por muertas (404/410) se borran en el
  * momento, así la lista no acumula dispositivos que ya no existen.
  */
-async function deliverPush(event: OrderCreatedEvent, env: NotifyEnv): Promise<void> {
+async function deliverPush(
+  env: NotifyEnv,
+  payload: string,
+  referencia: string
+): Promise<void> {
   if (!env.DB || !canPush(env)) return;
 
   const { results } = await env.DB.prepare(
@@ -110,16 +131,6 @@ async function deliverPush(event: OrderCreatedEvent, env: NotifyEnv): Promise<vo
   ).all();
 
   if (!results.length) return;
-
-  const d = event.data;
-  const payload = JSON.stringify({
-    tipo: 'order.created',
-    numero: d.orderNumber,
-    ventaId: d.orderId,
-    total: d.total,
-    articulos: d.itemCount,
-    url: `/pedidos/${d.orderId}`,
-  });
 
   const enviados = await Promise.all(
     (results as any[]).map((row) =>
@@ -145,7 +156,7 @@ async function deliverPush(event: OrderCreatedEvent, env: NotifyEnv): Promise<vo
         ).bind(envio.endpoint)
       );
     } else {
-      console.error('push.failed', d.orderNumber, envio.status, envio.error);
+      console.error('push.failed', referencia, envio.status, envio.error);
       statements.push(
         env.DB.prepare(
           `UPDATE PushSuscripciones SET Fallos = Fallos + 1 WHERE Endpoint = ?`
@@ -230,6 +241,16 @@ export async function publish(event: OrderCreatedEvent, env?: NotifyEnv): Promis
   console.log(JSON.stringify(event));
   if (!env) return;
 
+  const d = event.data;
+  const payload = JSON.stringify({
+    tipo: 'order.created',
+    numero: d.orderNumber,
+    ventaId: d.orderId,
+    total: d.total,
+    articulos: d.itemCount,
+    url: `/pedidos/${d.orderId}`,
+  });
+
   // Cada canal falla por su cuenta: que no ande WhatsApp no puede dejar sin
   // aviso al panel, y que falle un push no puede tumbar nada.
   const canales: Promise<void>[] = [];
@@ -237,16 +258,46 @@ export async function publish(event: OrderCreatedEvent, env?: NotifyEnv): Promis
   if (canNotify(env)) {
     canales.push(
       deliver(event, env).catch((error: any) =>
-        console.error('notify.error', event.data.orderNumber, error?.message)
+        console.error('notify.error', d.orderNumber, error?.message)
       )
     );
   }
 
   canales.push(
-    deliverPush(event, env).catch((error: any) =>
-      console.error('push.error', event.data.orderNumber, error?.message)
+    deliverPush(env, payload, d.orderNumber).catch((error: any) =>
+      console.error('push.error', d.orderNumber, error?.message)
     )
   );
 
   await Promise.allSettled(canales);
+}
+
+/**
+ * Aviso de borrador entrante por WhatsApp.
+ *
+ * Va solo al panel: un borrador no es una venta y no tiene sentido avisarlo
+ * por WhatsApp a quien justamente está en WhatsApp. Igual que el de pedidos,
+ * nunca lanza.
+ */
+export async function publishDraft(event: DraftCreatedEvent, env?: NotifyEnv): Promise<void> {
+  console.log(JSON.stringify(event));
+  if (!env) return;
+
+  const d = event.data;
+  const quien = d.contactName ? ` de ${d.contactName}` : '';
+  const cuerpo =
+    d.itemCount > 0
+      ? `${d.itemCount} ${d.itemCount === 1 ? 'producto' : 'productos'} · ${colones(d.total)}`
+      : 'Mensaje sin productos reconocidos';
+
+  const payload = JSON.stringify({
+    tipo: 'draft.created',
+    titulo: `Pedido por WhatsApp${quien}`,
+    cuerpo,
+    url: `/whatsapp/${d.draftId}`,
+  });
+
+  await deliverPush(env, payload, `borrador-${d.draftId}`).catch((error: any) =>
+    console.error('push.error', `borrador-${d.draftId}`, error?.message)
+  );
 }
