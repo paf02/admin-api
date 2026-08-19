@@ -44,6 +44,26 @@ whatsappRouter.get('/webhook', (c) => {
     return c.text(desafio, 200);
   }
 
+  // Abrir esta dirección en el navegador no lleva los parámetros de Meta, y
+  // un «verificación fallida» seco hace pensar que algo está roto. Si no vino
+  // ningún parámetro es una visita humana: se le explica qué es esto.
+  if (!modo && !token) {
+    return c.text(
+      [
+        'Webhook de WhatsApp de Estela Pura.',
+        '',
+        'Esta dirección no es para abrirla a mano: la llama Meta con sus propios',
+        'parámetros (hub.mode, hub.verify_token y hub.challenge) al dar de alta el',
+        'webhook, y después le manda acá los mensajes que reciba el número.',
+        '',
+        'Si ves esto, el endpoint está en pie y respondiendo.',
+      ].join('\n'),
+      200
+    );
+  }
+
+  // Con parámetros pero token equivocado: esto sí es un fallo de verificación
+  console.warn('whatsapp.webhook.verificacion-fallida');
   return c.text('Verificación fallida', 403);
 });
 
