@@ -6,6 +6,7 @@ import { categoriasRouter } from './routes/categorias';
 import { marcasRouter } from './routes/marcas';
 import { ventasRouter } from './routes/ventas';
 import { dashboardRouter } from './routes/dashboard';
+import { inventarioRouter } from './routes/inventario';
 
 type Bindings = {
   DB: D1Database;
@@ -19,7 +20,10 @@ const app = new Hono<{ Bindings: Bindings }>();
 app.use('/*', cors({
   origin: '*',
   allowHeaders: ['Content-Type', 'Authorization'],
-  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  // PATCH es obligatorio: el panel cambia estados de pedido, verifica pagos y
+  // ajusta existencias con PATCH. Sin él, el navegador bloquea la petición en
+  // el preflight y la pantalla solo ve «sin conexión».
+  allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 }));
 
 // Health check
@@ -34,5 +38,6 @@ app.route('/api/categorias', categoriasRouter);
 app.route('/api/marcas', marcasRouter);
 app.route('/api/ventas', ventasRouter);
 app.route('/api/dashboard', dashboardRouter);
+app.route('/api/inventario', inventarioRouter);
 
 export default app;

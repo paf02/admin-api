@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { LOW_STOCK_THRESHOLD } from '../lib/inventory';
 import { authMiddleware, adminMiddleware } from '../middleware/auth';
 
 type Bindings = {
@@ -104,7 +105,7 @@ productsRouter.get('/stock/bajo', async (c) => {
     FROM Productos p
     LEFT JOIN Categorias c ON p.CategoriaID = c.CategoriaID
     LEFT JOIN Marcas m ON p.MarcaID = m.MarcaID
-    WHERE p.Stock <= 5 AND p.Estado = 1
+    WHERE p.Stock <= ${LOW_STOCK_THRESHOLD} AND p.Estado = 1
     ORDER BY p.Stock ASC
   `).all();
   

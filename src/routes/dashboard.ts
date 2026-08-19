@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { LOW_STOCK_THRESHOLD } from '../lib/inventory';
 import { authMiddleware, adminMiddleware } from '../middleware/auth';
 
 type Bindings = { DB: D1Database; };
@@ -34,7 +35,7 @@ dashboardRouter.get('/stats', authMiddleware, adminMiddleware, async (c) => {
   const lowStock = await c.env.DB.prepare(`
     SELECT COUNT(*) as total 
     FROM Productos 
-    WHERE Stock <= 5 AND Estado = 1
+    WHERE Stock > 0 AND Stock <= ${LOW_STOCK_THRESHOLD} AND Estado = 1
   `).first();
   
   // Low stock products
@@ -48,7 +49,7 @@ dashboardRouter.get('/stats', authMiddleware, adminMiddleware, async (c) => {
     FROM Productos p
     LEFT JOIN Categorias c ON p.CategoriaID = c.CategoriaID
     LEFT JOIN Marcas m ON p.MarcaID = m.MarcaID
-    WHERE p.Stock <= 5 AND p.Estado = 1
+    WHERE p.Stock > 0 AND p.Stock <= ${LOW_STOCK_THRESHOLD} AND p.Estado = 1
     ORDER BY p.Stock ASC
   `).all();
   

@@ -10,8 +10,15 @@ import {
   PAYMENT_METHODS,
 } from '../lib/orders';
 import { buildOrderCreated, publish } from '../lib/events';
+import {
+  deductStatement,
+  movementStatement,
+  restoreStatement,
+} from '../lib/inventory';
 
-type Bindings = { DB: D1Database };
+import type { NotifyEnv } from '../lib/events';
+
+type Bindings = { DB: D1Database } & NotifyEnv;
 
 export const ventasRouter = new Hono<{ Bindings: Bindings }>();
 
@@ -236,6 +243,44 @@ ventasRouter.post('/', async (c) => {
   const costoEnvio = envioPorConfirmar ? 0 : Math.max(0, Number(body.CostoEnvio) || 0);
   const total = subtotal + costoEnvio;
 
+  // Primero se apartan las existencias, después se crea el pedido.
+  //
+  // La guarda `Stock >= ?` impide el negativo, pero por sí sola no basta: si
+  // dos clientes compran la última unidad a la vez, el UPDATE perdedor
+  // simplemente no afecta filas y, sin revisar nada, quedaría un pedido
+  // registrado sin descontar nada. Por eso se revisa `changes` de cada uno y,
+  // si alguno no aplicó, se devuelve lo ya apartado y no se crea el pedido.
+  let apartadas: typeof detalles = [];
+  try {
+    const deducciones = await c.env.DB.batch(
+      detalles.map((d) => deductStatement(c.env.DB, d.id, d.cantidad))
+    );
+
+    apartadas = detalles.filter((_, i) => deducciones[i]?.meta?.changes === 1);
+
+    if (apartadas.length !== detalles.length) {
+      if (apartadas.length) {
+        await c.env.DB.batch(
+          apartadas.map((d) => restoreStatement(c.env.DB, d.id, d.cantidad))
+        );
+      }
+      const faltantes = detalles
+        .filter((d) => !apartadas.includes(d))
+        .map((d) => d.nombre);
+      return c.json(
+        {
+          success: false,
+          message: `Alguien se adelantó con: ${faltantes.join(', ')}. Revisá las existencias.`,
+          sinStock: faltantes,
+        },
+        409
+      );
+    }
+  } catch (error: any) {
+    console.error('ventas.reserva', error?.message);
+    return c.json({ success: false, message: 'No se pudieron apartar las existencias' }, 500);
+  }
+
   try {
     const insert = await c.env.DB.prepare(`
       INSERT INTO Ventas (
@@ -266,33 +311,49 @@ ventasRouter.post('/', async (c) => {
     const ventaId = Number(insert.meta.last_row_id);
     const numero = orderNumberFrom(ventaId);
 
-    // Detalle, descuento de stock, número y bitácora en un solo batch: si algo
-    // falla, no queda un pedido a medias con stock ya descontado.
+    // Las existencias ya se apartaron arriba; acá solo queda dejar constancia.
     const statements = [
       c.env.DB.prepare(`UPDATE Ventas SET NumeroPedido = ? WHERE VentaID = ?`).bind(numero, ventaId),
-      ...detalles.flatMap((d) => [
-        c.env.DB.prepare(
-          `INSERT INTO DetalleVenta (VentaID, ProductoID, Cantidad, PrecioCompra, Precio, SubTotal, NombreProducto)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).bind(ventaId, d.id, d.cantidad, d.compra, d.precio, d.sub, d.nombre),
-        c.env.DB.prepare(
-          `UPDATE Productos SET Stock = Stock - ? WHERE ProductoID = ? AND Stock >= ?`
-        ).bind(d.cantidad, d.id, d.cantidad),
-      ]),
+      ...detalles.flatMap((d) => {
+        const anterior = Number(porId.get(d.id)?.Stock) || 0;
+        return [
+          c.env.DB.prepare(
+            `INSERT INTO DetalleVenta (VentaID, ProductoID, Cantidad, PrecioCompra, Precio, SubTotal, NombreProducto)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+          ).bind(ventaId, d.id, d.cantidad, d.compra, d.precio, d.sub, d.nombre),
+          movementStatement(c.env.DB, {
+            productoId: d.id,
+            anterior,
+            cambio: -d.cantidad,
+            nuevo: anterior - d.cantidad,
+            motivo: 'Venta',
+            ventaId,
+          }),
+        ];
+      }),
       historyStatement(c.env.DB, ventaId, 'Creado', `Pedido ${numero} recibido`, null),
     ];
 
     await c.env.DB.batch(statements);
 
-    await publish(
-      buildOrderCreated({
-        orderNumber: numero,
-        customerName: cliente,
-        total,
-        paymentMethod: metodoPago,
-        itemCount: detalles.reduce((n, d) => n + d.cantidad, 0),
-      })
-    );
+    // El aviso al administrador va aparte y nunca bloquea la respuesta: el
+    // cliente ya tiene su pedido creado aunque la notificación tarde o falle.
+    const evento = buildOrderCreated({
+      orderId: ventaId,
+      orderNumber: numero,
+      customerName: cliente,
+      total,
+      paymentMethod: metodoPago,
+      paymentStatus: initialPaymentStatus(metodoPago),
+      itemCount: detalles.reduce((n, d) => n + d.cantidad, 0),
+      items: detalles.map((d) => ({ name: d.nombre, quantity: d.cantidad })),
+    });
+
+    if (c.executionCtx?.waitUntil) {
+      c.executionCtx.waitUntil(publish(evento, c.env));
+    } else {
+      await publish(evento, c.env);
+    }
 
     return c.json(
       { success: true, message: 'Pedido registrado', data: { VentaID: ventaId, NumeroPedido: numero, Total: total } },
@@ -300,6 +361,13 @@ ventasRouter.post('/', async (c) => {
     );
   } catch (error: any) {
     console.error('ventas.create', error?.message);
+    // Las existencias ya estaban apartadas: si el pedido no llegó a crearse,
+    // devolverlas es obligatorio o quedan retenidas por un pedido inexistente.
+    try {
+      await c.env.DB.batch(apartadas.map((d) => restoreStatement(c.env.DB, d.id, d.cantidad)));
+    } catch (rollbackError: any) {
+      console.error('ventas.create.rollback', rollbackError?.message);
+    }
     return c.json({ success: false, message: 'No se pudo registrar el pedido' }, 500);
   }
 });
@@ -406,8 +474,8 @@ ventasRouter.post('/:id/cancelar', ...admin, async (c) => {
   const { motivo } = await c.req.json().catch(() => ({}));
 
   const venta = await c.env.DB.prepare(
-    `SELECT EstadoVenta, StockDevuelto FROM Ventas WHERE VentaID = ?`
-  ).bind(id).first<{ EstadoVenta: string; StockDevuelto: number }>();
+    `SELECT EstadoVenta, StockDevuelto, NumeroPedido FROM Ventas WHERE VentaID = ?`
+  ).bind(id).first<{ EstadoVenta: string; StockDevuelto: number; NumeroPedido: string | null }>();
 
   if (!venta) return c.json({ success: false, message: 'Pedido no encontrado' }, 404);
   if (venta.EstadoVenta === 'Cancelado') {
@@ -417,22 +485,40 @@ ventasRouter.post('/:id/cancelar', ...admin, async (c) => {
     return c.json({ success: false, message: 'Un pedido entregado no se cancela' }, 409);
   }
 
+  // Se lee el stock actual junto al detalle para poder anotar el antes y el
+  // después de cada devolución en el historial.
   const { results: detalles } = await c.env.DB.prepare(
-    `SELECT ProductoID, Cantidad FROM DetalleVenta WHERE VentaID = ?`
-  ).bind(id).all<{ ProductoID: number; Cantidad: number }>();
+    `SELECT d.ProductoID, d.Cantidad, p.Stock
+       FROM DetalleVenta d
+       LEFT JOIN Productos p ON p.ProductoID = d.ProductoID
+      WHERE d.VentaID = ?`
+  ).bind(id).all<{ ProductoID: number; Cantidad: number; Stock: number }>();
 
   try {
     const devolver = venta.StockDevuelto === 0;
+    const numero = venta.NumeroPedido ?? `#${id}`;
 
     await c.env.DB.batch([
       c.env.DB.prepare(
         `UPDATE Ventas SET EstadoVenta = 'Cancelado', StockDevuelto = 1 WHERE VentaID = ? AND StockDevuelto = 0`
       ).bind(id),
       ...(devolver
-        ? detalles.map((d) =>
-            c.env.DB.prepare(`UPDATE Productos SET Stock = Stock + ? WHERE ProductoID = ?`)
-              .bind(d.Cantidad, d.ProductoID)
-          )
+        ? detalles.flatMap((d) => {
+            const anterior = Number(d.Stock) || 0;
+            return [
+              restoreStatement(c.env.DB, d.ProductoID, d.Cantidad),
+              movementStatement(c.env.DB, {
+                productoId: d.ProductoID,
+                anterior,
+                cambio: d.Cantidad,
+                nuevo: anterior + d.Cantidad,
+                motivo: 'Pedido cancelado',
+                nota: `Pedido ${numero}`,
+                ventaId: id,
+                usuario: usuarioDe(c),
+              }),
+            ];
+          })
         : []),
       historyStatement(
         c.env.DB,
