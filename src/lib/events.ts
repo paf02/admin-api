@@ -15,7 +15,11 @@
  *   Quien reciba el aviso abre el pedido en el panel para ver el resto.
  */
 
-export type NotifyEnv = {
+import { canPush, sendPush, type VapidEnv } from './push';
+
+export type NotifyEnv = VapidEnv & {
+  /** Base de datos: de acá salen los dispositivos suscritos al panel. */
+  DB?: D1Database;
   /** Token permanente de la app de WhatsApp Business (secret). */
   WHATSAPP_TOKEN?: string;
   /** ID del número emisor en la plataforma de WhatsApp. */
@@ -83,9 +87,75 @@ export function notificationText(event: OrderCreatedEvent, env: NotifyEnv): stri
   return lines.join('\n');
 }
 
-/** true cuando hay con qué mandar el aviso. Sin credenciales solo se registra. */
+/** true cuando hay con qué mandar el aviso por WhatsApp. Sin credenciales solo se registra. */
 export const canNotify = (env: NotifyEnv) =>
   Boolean(env?.WHATSAPP_TOKEN && env?.WHATSAPP_PHONE_ID && env?.ADMIN_WHATSAPP);
+
+/**
+ * Aviso al panel por Web Push.
+ *
+ * Va a todos los dispositivos suscritos —teléfono y computadora pueden estar
+ * los dos— y lleva solo lo necesario para reconocer el pedido: número, total
+ * y cuántos artículos. Ni nombre, ni teléfono, ni dirección: eso se ve
+ * abriendo el pedido, que exige sesión.
+ *
+ * Las suscripciones que el servicio da por muertas (404/410) se borran en el
+ * momento, así la lista no acumula dispositivos que ya no existen.
+ */
+async function deliverPush(event: OrderCreatedEvent, env: NotifyEnv): Promise<void> {
+  if (!env.DB || !canPush(env)) return;
+
+  const { results } = await env.DB.prepare(
+    `SELECT Endpoint, P256dh, Auth FROM PushSuscripciones`
+  ).all();
+
+  if (!results.length) return;
+
+  const d = event.data;
+  const payload = JSON.stringify({
+    tipo: 'order.created',
+    numero: d.orderNumber,
+    ventaId: d.orderId,
+    total: d.total,
+    articulos: d.itemCount,
+    url: `/pedidos/${d.orderId}`,
+  });
+
+  const enviados = await Promise.all(
+    (results as any[]).map((row) =>
+      sendPush(env, { endpoint: row.Endpoint, p256dh: row.P256dh, auth: row.Auth }, payload)
+    )
+  );
+
+  const statements = [];
+  for (const envio of enviados) {
+    if (envio.gone) {
+      statements.push(
+        env.DB.prepare(`DELETE FROM PushSuscripciones WHERE Endpoint = ?`).bind(envio.endpoint)
+      );
+      continue;
+    }
+
+    if (envio.ok) {
+      statements.push(
+        env.DB.prepare(
+          `UPDATE PushSuscripciones
+              SET UltimoEnvio = datetime('now', 'localtime'), Fallos = 0
+            WHERE Endpoint = ?`
+        ).bind(envio.endpoint)
+      );
+    } else {
+      console.error('push.failed', d.orderNumber, envio.status, envio.error);
+      statements.push(
+        env.DB.prepare(
+          `UPDATE PushSuscripciones SET Fallos = Fallos + 1 WHERE Endpoint = ?`
+        ).bind(envio.endpoint)
+      );
+    }
+  }
+
+  if (statements.length) await env.DB.batch(statements);
+}
 
 /**
  * Entrega el aviso por la plataforma de WhatsApp Business.
@@ -157,10 +227,26 @@ async function deliver(event: OrderCreatedEvent, env: NotifyEnv): Promise<void> 
  * creado, con sus existencias descontadas y visible en el panel.
  */
 export async function publish(event: OrderCreatedEvent, env?: NotifyEnv): Promise<void> {
-  try {
-    console.log(JSON.stringify(event));
-    if (env && canNotify(env)) await deliver(event, env);
-  } catch (error: any) {
-    console.error('notify.error', event.data.orderNumber, error?.message);
+  console.log(JSON.stringify(event));
+  if (!env) return;
+
+  // Cada canal falla por su cuenta: que no ande WhatsApp no puede dejar sin
+  // aviso al panel, y que falle un push no puede tumbar nada.
+  const canales: Promise<void>[] = [];
+
+  if (canNotify(env)) {
+    canales.push(
+      deliver(event, env).catch((error: any) =>
+        console.error('notify.error', event.data.orderNumber, error?.message)
+      )
+    );
   }
+
+  canales.push(
+    deliverPush(event, env).catch((error: any) =>
+      console.error('push.error', event.data.orderNumber, error?.message)
+    )
+  );
+
+  await Promise.allSettled(canales);
 }
