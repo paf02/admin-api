@@ -35,6 +35,20 @@ const TABLAS: { nombre: string; sql: string }[] = [
   { nombre: 'PedidosBorrador', sql: 'SELECT * FROM PedidosBorrador ORDER BY BorradorID' },
   // Sin PasswordHash: un respaldo no es lugar para eso
   { nombre: 'Users', sql: 'SELECT UserID, Username, FullName, Email, Role, Active, CreatedAt, LastLogin FROM Users ORDER BY UserID' },
+  // Las cuentas de cliente son lo único que no se puede volver a armar desde
+  // otro lado: quien se registró, su dirección y su lista de deseos. Igual que
+  // el panel, sin PasswordHash.
+  {
+    nombre: 'Clientes',
+    sql: `SELECT ClienteID, Correo, Nombre, Telefono, Provincia, Canton, Distrito,
+                 DireccionExacta, Waze, CreadoEn, UltimoAcceso
+            FROM Clientes ORDER BY ClienteID`,
+  },
+  { nombre: 'ClientesFavoritos', sql: 'SELECT * FROM ClientesFavoritos ORDER BY ClienteID' },
+  // Quién pidió que le avisen cuando algo vuelva: es una venta esperando
+  { nombre: 'AvisosStock', sql: 'SELECT * FROM AvisosStock ORDER BY AvisoID' },
+  // Qué se le avisó a cada pedido, para no repetir un correo al restaurar
+  { nombre: 'CorreosPedido', sql: 'SELECT * FROM CorreosPedido ORDER BY VentaID' },
 ];
 
 export type Respaldo = {
