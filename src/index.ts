@@ -14,6 +14,7 @@ import { respaldosRouter } from './routes/respaldos';
 import { reportesRouter } from './routes/reportes';
 import { visitasRouter } from './routes/visitas';
 import { avisosRouter } from './routes/avisos';
+import { cuentaRouter } from './routes/cuenta';
 import { guardarRespaldo } from './lib/respaldo';
 
 /** Cron del respaldo diario; el resto de crons solo corren la caducidad. */
@@ -56,6 +57,7 @@ app.route('/api/respaldos', respaldosRouter);
 app.route('/api/reportes', reportesRouter);
 app.route('/api/visitas', visitasRouter);
 app.route('/api/avisos', avisosRouter);
+app.route('/api/cuenta', cuentaRouter);
 
 /**
  * El Worker atiende peticiones y, una vez al día, saca el respaldo.
