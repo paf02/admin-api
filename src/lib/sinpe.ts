@@ -104,6 +104,8 @@ export async function buscarCandidatos(
   const coincideTelefono = (c: { Telefono: string | null }) =>
     Boolean(telefono && String(c.Telefono ?? '').replace(/\D/g, '').slice(-8) === telefono);
 
+  const orden = { alta: 0, media: 1, baja: 2 };
+
   return results.map((c) => {
     // Monto exacto + teléfono del remitente = no hay duda razonable.
     if (coincideTelefono(c)) {
@@ -119,5 +121,8 @@ export async function buscarCandidatos(
       confianza: 'media' as const,
       motivo: `${results.length} pedidos esperan ese mismo monto`,
     };
-  });
+  })
+    // El más probable primero: con seis pedidos del mismo monto, el que además
+    // calza por teléfono no debería quedar sepultado por ser más viejo.
+    .sort((a, b) => orden[a.confianza] - orden[b.confianza]);
 }
