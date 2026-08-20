@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { LOW_STOCK_THRESHOLD } from '../lib/inventory';
-import { authMiddleware, adminMiddleware } from '../middleware/auth';
+import { authMiddleware, adminMiddleware, optionalAuthMiddleware } from '../middleware/auth';
 
 type Bindings = {
   DB: D1Database;
@@ -9,10 +9,26 @@ type Bindings = {
 
 export const productsRouter = new Hono<{ Bindings: Bindings }>();
 
+/**
+ * Lo que el catálogo público no tiene por qué ver.
+ *
+ * `p.*` traía `PrecioCompra` a cualquiera que abriera /api/productos: el
+ * costo de cada frasco y, con el precio de venta al lado, el margen exacto de
+ * la tienda. El panel sí lo necesita, y manda su token en cada llamada, así
+ * que se conserva para quien viene con sesión.
+ */
+const PRIVADO = ['PrecioCompra'] as const;
+
+const sinDatosInternos = (fila: Record<string, unknown>) => {
+  const copia = { ...fila };
+  for (const campo of PRIVADO) delete copia[campo];
+  return copia;
+};
+
 // Public routes (GET) - no authentication required for PWA
 
 // Get all products
-productsRouter.get('/', async (c) => {
+productsRouter.get('/', optionalAuthMiddleware, async (c) => {
   const { results } = await c.env.DB.prepare(`
     SELECT 
       p.*,
@@ -24,12 +40,14 @@ productsRouter.get('/', async (c) => {
     WHERE p.Estado = 1
     ORDER BY p.FechaRegistro DESC
   `).all();
-  
-  return c.json({ success: true, data: results });
+
+  const data = (c as any).get('user') ? results : (results as any[]).map(sinDatosInternos);
+
+  return c.json({ success: true, data });
 });
 
 // Get product by ID
-productsRouter.get('/:id', async (c) => {
+productsRouter.get('/:id', optionalAuthMiddleware, async (c) => {
   const id = c.req.param('id');
   const { results } = await c.env.DB.prepare(`
     SELECT 
@@ -45,8 +63,10 @@ productsRouter.get('/:id', async (c) => {
   if (results.length === 0) {
     return c.json({ success: false, message: 'Producto no encontrado' }, 404);
   }
-  
-  return c.json({ success: true, data: results[0] });
+
+  const producto = (c as any).get('user') ? results[0] : sinDatosInternos(results[0] as any);
+
+  return c.json({ success: true, data: producto });
 });
 
 // Protected routes - require authentication
