@@ -11,8 +11,15 @@ const PUBLICO = 'estelapura-cliente';
 const EMISOR = 'estelapura-api';
 const DIAS = 30;
 
-const clave = (secreto?: string) =>
-  new TextEncoder().encode(secreto || 'dev-secret-change-in-production');
+/**
+ * Misma política que el panel: si falta el secreto se falla cerrado. Una
+ * llave por defecto en un repositorio público deja que cualquiera se firme
+ * una sesión y lea los pedidos de otra persona.
+ */
+const clave = (secreto?: string) => {
+  if (!secreto) throw new Error('JWT_SECRET no está configurado en el Worker');
+  return new TextEncoder().encode(secreto);
+};
 
 export async function tokenCliente(clienteId: number, correo: string, secreto?: string) {
   return new SignJWT({ clienteId, correo })
@@ -45,25 +52,30 @@ export function correoValido(correo: string) {
   return /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(correo) && correo.length <= 120;
 }
 
-/** Código de seis dígitos con el generador criptográfico, no con Math.random. */
-export function nuevoCodigo() {
-  const n = new Uint32Array(1);
-  crypto.getRandomValues(n);
-  return String(n[0] % 1_000_000).padStart(6, '0');
-}
-
-export async function hashCodigo(codigo: string, correo: string) {
-  // El correo entra en el hash para que dos códigos iguales de personas
-  // distintas no compartan huella
-  const datos = new TextEncoder().encode(`${correo}:${codigo}`);
-  const buf = await crypto.subtle.digest('SHA-256', datos);
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
 /** Comparación en tiempo constante: no filtra por dónde dejaron de coincidir. */
 export function igualSeguro(a: string, b: string) {
   if (a.length !== b.length) return false;
   let dif = 0;
   for (let i = 0; i < a.length; i++) dif |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return dif === 0;
+}
+
+/**
+ * Reglas de contraseña: largo mínimo y nada más.
+ *
+ * Exigir mayúsculas y símbolos empuja a la gente a «Perfume1!» y a anotarla
+ * en un papel; el largo es lo que de verdad cuesta adivinar. El freno por
+ * intentos hace el resto del trabajo.
+ */
+export const LARGO_MINIMO = 8;
+
+export function revisarClave(clave: string, correo: string) {
+  if (typeof clave !== 'string' || clave.length < LARGO_MINIMO) {
+    return `La contraseña necesita al menos ${LARGO_MINIMO} caracteres`;
+  }
+  if (clave.length > 200) return 'Esa contraseña es demasiado larga';
+  if (clave.trim().toLowerCase() === correo.toLowerCase()) {
+    return 'La contraseña no puede ser tu propio correo';
+  }
+  return null;
 }

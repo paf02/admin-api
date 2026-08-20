@@ -1,31 +1,29 @@
 import { Hono } from 'hono';
-import { enviarCorreo, plantillaCodigo } from '../lib/correo';
+import { authMiddleware, adminMiddleware } from '../middleware/auth';
+import { hashPassword, verifyPasswordDetallado } from '../utils/crypto';
 import {
   correoValido,
-  hashCodigo,
-  igualSeguro,
   leerTokenCliente,
   normalizarCorreo,
-  nuevoCodigo,
+  revisarClave,
   tokenCliente,
 } from '../lib/cuentas';
 
 type Bindings = {
   DB: D1Database;
   JWT_SECRET?: string;
-  RESEND_API_KEY?: string;
-  CORREO_REMITENTE?: string;
-  CORREO_MODO_PRUEBA?: string;
 };
 
 export const cuentaRouter = new Hono<{ Bindings: Bindings }>();
 
-const MINUTOS_CODIGO = 15;
-const INTENTOS_POR_CODIGO = 5;
-// Pedir código: tres por correo cada cuarto de hora, quince por IP cada hora.
-// Alcanza de sobra para quien no recibe el primero y corta a quien lo usaría
-// para llenarle el buzón a otra persona.
-const TOPE_CORREO = 3;
+/*
+ * Freno a los intentos de adivinar la contraseña, con la misma tabla y los
+ * mismos números que el panel: cinco fallos del mismo correo o quince desde
+ * la misma IP cierran la puerta quince minutos. El usuario se anota con
+ * prefijo «cliente:» para que un cliente bloqueado no bloquee al panel.
+ */
+const VENTANA_MINUTOS = 15;
+const TOPE_CORREO = 5;
 const TOPE_IP = 15;
 
 const ipDe = (c: any) =>
@@ -59,14 +57,40 @@ const perfilPublico = (fila: any) => ({
 
 /* ── Entrar ─────────────────────────────────────────────────────────── */
 
+async function estaBloqueado(db: D1Database, correo: string, ip: string) {
+  const fila: any = await db
+    .prepare(
+      `SELECT
+         SUM(CASE WHEN Usuario = ? THEN 1 ELSE 0 END) AS PorCorreo,
+         SUM(CASE WHEN IP = ?      THEN 1 ELSE 0 END) AS PorIP
+       FROM IntentosLogin
+       WHERE Exito = 0 AND Fecha > datetime('now', 'localtime', ?)`
+    )
+    .bind(`cliente:${correo}`, ip, `-${VENTANA_MINUTOS} minutes`)
+    .first();
+
+  return (Number(fila?.PorCorreo) || 0) >= TOPE_CORREO || (Number(fila?.PorIP) || 0) >= TOPE_IP;
+}
+
+async function anotarIntento(db: D1Database, correo: string, ip: string, exito: boolean) {
+  await db.batch([
+    db.prepare(`INSERT INTO IntentosLogin (Usuario, IP, Exito) VALUES (?, ?, ?)`)
+      .bind(`cliente:${correo}`, ip, exito ? 1 : 0),
+    db.prepare(`DELETE FROM IntentosLogin WHERE Fecha < datetime('now', 'localtime', '-1 day')`),
+  ]);
+}
+
 /**
- * Paso 1: pedir el código.
+ * Crear la cuenta.
  *
- * Responde lo mismo exista o no la cuenta. Cualquier correo puede crear una,
- * así que no hay nada que ocultar sobre quién está registrado, pero tampoco
- * hace falta confirmárselo a quien va probando direcciones ajenas.
+ * Si ya existe se dice con todas las letras: es lo que la persona necesita
+ * saber para ir a entrar en vez de quedarse trabada, y cualquiera puede
+ * comprobar lo mismo intentando registrarse igual.
+ *
+ * El nombre y el teléfono se toman del último pedido hecho con ese correo,
+ * así quien ya compró no tiene que volver a escribirlos.
  */
-cuentaRouter.post('/codigo', async (c) => {
+cuentaRouter.post('/registro', async (c) => {
   let body: any;
   try {
     body = await c.req.json();
@@ -75,66 +99,53 @@ cuentaRouter.post('/codigo', async (c) => {
   }
 
   const correo = normalizarCorreo(body?.correo);
+  const clave = String(body?.clave ?? '');
+
   if (!correoValido(correo)) {
     return c.json({ success: false, message: 'Escribí un correo válido' }, 400);
   }
 
-  const ip = ipDe(c);
+  const problema = revisarClave(clave, correo);
+  if (problema) return c.json({ success: false, message: problema }, 400);
 
   try {
-    const freno: any = await c.env.DB.prepare(
-      `SELECT
-         SUM(CASE WHEN Correo = ? AND CreadoEn > datetime('now','localtime','-15 minutes') THEN 1 ELSE 0 END) AS PorCorreo,
-         SUM(CASE WHEN IP = ?     AND CreadoEn > datetime('now','localtime','-60 minutes') THEN 1 ELSE 0 END) AS PorIP
-       FROM ClientesCodigos`
-    ).bind(correo, ip).first();
+    const existe = await c.env.DB.prepare(
+      `SELECT ClienteID, PasswordHash FROM Clientes WHERE Correo = ?`
+    ).bind(correo).first<any>();
 
-    if ((Number(freno?.PorCorreo) || 0) >= TOPE_CORREO || (Number(freno?.PorIP) || 0) >= TOPE_IP) {
-      return c.json(
-        { success: false, message: 'Ya pediste varios códigos. Esperá unos minutos y volvé a intentar.' },
-        429
-      );
+    if (existe?.PasswordHash) {
+      return c.json({ success: false, message: 'Ya hay una cuenta con ese correo. Entrá con tu contraseña.' }, 409);
     }
 
-    const codigo = nuevoCodigo();
+    const hash = await hashPassword(clave);
 
-    await c.env.DB.batch([
-      // Un código nuevo invalida los anteriores del mismo correo
-      c.env.DB.prepare(`UPDATE ClientesCodigos SET Usado = 1 WHERE Correo = ? AND Usado = 0`).bind(correo),
-      c.env.DB.prepare(
-        `INSERT INTO ClientesCodigos (Correo, CodigoHash, Expira, IP)
-         VALUES (?, ?, datetime('now','localtime', ?), ?)`
-      ).bind(correo, await hashCodigo(codigo, correo), `+${MINUTOS_CODIGO} minutes`, ip),
-      // La tabla no crece para siempre
-      c.env.DB.prepare(`DELETE FROM ClientesCodigos WHERE CreadoEn < datetime('now','localtime','-2 days')`),
-    ]);
+    if (existe) {
+      // Cuenta creada por una versión anterior, todavía sin contraseña
+      await c.env.DB.prepare(`UPDATE Clientes SET PasswordHash = ? WHERE ClienteID = ?`)
+        .bind(hash, existe.ClienteID).run();
+    } else {
+      const ultimo: any = await c.env.DB.prepare(
+        `SELECT Cliente, Telefono FROM Ventas
+          WHERE lower(trim(Email)) = ? ORDER BY VentaID DESC LIMIT 1`
+      ).bind(correo).first();
 
-    const { asunto, html, texto } = plantillaCodigo(codigo, MINUTOS_CODIGO);
-    const envio = await enviarCorreo(c.env, correo, asunto, html, texto);
-
-    if (!envio.enviado) {
-      // Sin correo configurado no se puede entrar: mejor decirlo que dejar a
-      // la persona esperando un mensaje que nunca va a llegar. El código se
-      // borra para no dejar rastro de un envío que no ocurrió, y para que el
-      // freno de tres por cuarto de hora no cuente intentos fallidos.
       await c.env.DB.prepare(
-        `DELETE FROM ClientesCodigos WHERE Correo = ? AND Usado = 0`
-      ).bind(correo).run();
-
-      return c.json(
-        { success: false, message: 'No pudimos enviar el código. Escríbenos y te ayudamos.' },
-        503
-      );
+        `INSERT INTO Clientes (Correo, Nombre, Telefono, PasswordHash) VALUES (?, ?, ?, ?)`
+      ).bind(correo, ultimo?.Cliente ?? null, ultimo?.Telefono ?? null, hash).run();
     }
 
-    return c.json({ success: true, message: `Te enviamos un código a ${correo}` });
+    const cliente: any = await c.env.DB.prepare(`SELECT * FROM Clientes WHERE Correo = ?`)
+      .bind(correo).first();
+
+    const token = await tokenCliente(Number(cliente.ClienteID), correo, c.env.JWT_SECRET);
+    return c.json({ success: true, data: { token, perfil: perfilPublico(cliente) } });
   } catch (error: any) {
-    console.error('cuenta.codigo', error?.message);
-    return c.json({ success: false, message: 'No se pudo enviar el código' }, 500);
+    console.error('cuenta.registro', error?.message);
+    return c.json({ success: false, message: 'No se pudo crear la cuenta' }, 500);
   }
 });
 
-/** Paso 2: canjear el código por una sesión. Acá nace la cuenta si no existía. */
+/** Entrar. El mensaje de error es el mismo falle el correo o falle la clave. */
 cuentaRouter.post('/entrar', async (c) => {
   let body: any;
   try {
@@ -144,64 +155,137 @@ cuentaRouter.post('/entrar', async (c) => {
   }
 
   const correo = normalizarCorreo(body?.correo);
-  const codigo = String(body?.codigo ?? '').replace(/\D/g, '');
+  const clave = String(body?.clave ?? '');
+  const ip = ipDe(c);
 
-  if (!correoValido(correo) || codigo.length !== 6) {
-    return c.json({ success: false, message: 'Revisá el correo y el código' }, 400);
+  if (!correo || !clave) {
+    return c.json({ success: false, message: 'Escribí tu correo y tu contraseña' }, 400);
   }
 
   try {
-    const fila: any = await c.env.DB.prepare(
-      `SELECT CodigoID, CodigoHash, Intentos
-         FROM ClientesCodigos
-        WHERE Correo = ? AND Usado = 0 AND Expira > datetime('now','localtime')
-        ORDER BY CodigoID DESC LIMIT 1`
+    if (await estaBloqueado(c.env.DB, correo, ip)) {
+      return c.json(
+        { success: false, message: `Demasiados intentos. Probá de nuevo en ${VENTANA_MINUTOS} minutos.` },
+        429
+      );
+    }
+
+    const cliente: any = await c.env.DB.prepare(
+      `SELECT * FROM Clientes WHERE Correo = ? AND PasswordHash IS NOT NULL`
     ).bind(correo).first();
 
-    if (!fila) {
-      return c.json({ success: false, message: 'Ese código venció. Pedí uno nuevo.' }, 401);
+    if (!cliente) {
+      await anotarIntento(c.env.DB, correo, ip, false);
+      return c.json({ success: false, message: 'Correo o contraseña incorrectos' }, 401);
     }
 
-    if (Number(fila.Intentos) >= INTENTOS_POR_CODIGO) {
-      await c.env.DB.prepare(`UPDATE ClientesCodigos SET Usado = 1 WHERE CodigoID = ?`)
-        .bind(fila.CodigoID).run();
-      return c.json({ success: false, message: 'Demasiados intentos. Pedí un código nuevo.' }, 429);
+    const { valido, necesitaActualizar } = await verifyPasswordDetallado(clave, cliente.PasswordHash);
+
+    if (!valido) {
+      await anotarIntento(c.env.DB, correo, ip, false);
+      return c.json({ success: false, message: 'Correo o contraseña incorrectos' }, 401);
     }
 
-    if (!igualSeguro(await hashCodigo(codigo, correo), String(fila.CodigoHash))) {
-      await c.env.DB.prepare(`UPDATE ClientesCodigos SET Intentos = Intentos + 1 WHERE CodigoID = ?`)
-        .bind(fila.CodigoID).run();
-      return c.json({ success: false, message: 'Ese código no es correcto' }, 401);
+    await anotarIntento(c.env.DB, correo, ip, true);
+
+    const sentencias = [
+      c.env.DB.prepare(`UPDATE Clientes SET UltimoAcceso = datetime('now','localtime') WHERE ClienteID = ?`)
+        .bind(cliente.ClienteID),
+    ];
+    if (necesitaActualizar) {
+      sentencias.push(
+        c.env.DB.prepare(`UPDATE Clientes SET PasswordHash = ? WHERE ClienteID = ?`)
+          .bind(await hashPassword(clave), cliente.ClienteID)
+      );
     }
-
-    await c.env.DB.prepare(`UPDATE ClientesCodigos SET Usado = 1 WHERE CodigoID = ?`)
-      .bind(fila.CodigoID).run();
-
-    // La cuenta se crea al primer ingreso. El nombre y el teléfono se toman
-    // del último pedido hecho con ese correo, así no hay que escribirlos de
-    // nuevo si la persona ya compró antes.
-    await c.env.DB.prepare(
-      `INSERT INTO Clientes (Correo, Nombre, Telefono)
-       SELECT ?, v.Cliente, v.Telefono
-         FROM (SELECT ? AS c) x
-         LEFT JOIN Ventas v
-           ON lower(trim(v.Email)) = ?
-          AND v.VentaID = (SELECT MAX(VentaID) FROM Ventas WHERE lower(trim(Email)) = ?)
-       ON CONFLICT(Correo) DO NOTHING`
-    ).bind(correo, correo, correo, correo).run();
-
-    await c.env.DB.prepare(
-      `UPDATE Clientes SET UltimoAcceso = datetime('now','localtime') WHERE Correo = ?`
-    ).bind(correo).run();
-
-    const cliente: any = await c.env.DB.prepare(`SELECT * FROM Clientes WHERE Correo = ?`)
-      .bind(correo).first();
+    await c.env.DB.batch(sentencias);
 
     const token = await tokenCliente(Number(cliente.ClienteID), correo, c.env.JWT_SECRET);
     return c.json({ success: true, data: { token, perfil: perfilPublico(cliente) } });
   } catch (error: any) {
     console.error('cuenta.entrar', error?.message);
     return c.json({ success: false, message: 'No se pudo entrar' }, 500);
+  }
+});
+
+/** Cambiar la contraseña propia. Exige la actual: un token robado no alcanza. */
+cuentaRouter.post('/clave', conSesion, async (c) => {
+  const { clienteId, correo } = c.get('cliente') as any;
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ success: false, message: 'Cuerpo inválido' }, 400);
+  }
+
+  const actual = String(body?.actual ?? '');
+  const nueva = String(body?.nueva ?? '');
+
+  const problema = revisarClave(nueva, correo);
+  if (problema) return c.json({ success: false, message: problema }, 400);
+
+  try {
+    const cliente: any = await c.env.DB.prepare(
+      `SELECT PasswordHash FROM Clientes WHERE ClienteID = ?`
+    ).bind(clienteId).first();
+
+    const { valido } = await verifyPasswordDetallado(actual, cliente?.PasswordHash ?? '');
+    if (!valido) {
+      // 403 y no 401: la sesión es válida, lo que falla es la contraseña que
+      // se escribió. Con 401 el navegador entiende «tu sesión venció», borra
+      // el token y echa de la cuenta a quien solo se equivocó al teclear.
+      return c.json({ success: false, message: 'La contraseña actual no es correcta' }, 403);
+    }
+
+    await c.env.DB.prepare(`UPDATE Clientes SET PasswordHash = ? WHERE ClienteID = ?`)
+      .bind(await hashPassword(nueva), clienteId).run();
+
+    return c.json({ success: true, message: 'Contraseña cambiada' });
+  } catch (error: any) {
+    console.error('cuenta.clave', error?.message);
+    return c.json({ success: false, message: 'No se pudo cambiar la contraseña' }, 500);
+  }
+});
+
+/**
+ * Reinicio desde el panel, para cuando un cliente olvida su contraseña.
+ *
+ * Sin servicio de correo no hay forma automática de recuperarla, así que la
+ * tienda le pone una temporal y se la pasa por WhatsApp. Solo administradores,
+ * y nunca devuelve la contraseña vieja porque no existe en ninguna parte.
+ */
+cuentaRouter.post('/reiniciar', authMiddleware, adminMiddleware, async (c) => {
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ success: false, message: 'Cuerpo inválido' }, 400);
+  }
+
+  const correo = normalizarCorreo(body?.correo);
+  const nueva = String(body?.clave ?? '');
+
+  const problema = revisarClave(nueva, correo);
+  if (problema) return c.json({ success: false, message: problema }, 400);
+
+  try {
+    const cliente: any = await c.env.DB.prepare(`SELECT ClienteID FROM Clientes WHERE Correo = ?`)
+      .bind(correo).first();
+
+    if (!cliente) return c.json({ success: false, message: 'No hay cuenta con ese correo' }, 404);
+
+    await c.env.DB.batch([
+      c.env.DB.prepare(`UPDATE Clientes SET PasswordHash = ? WHERE ClienteID = ?`)
+        .bind(await hashPassword(nueva), cliente.ClienteID),
+      // Que el bloqueo por intentos no le impida entrar con la nueva
+      c.env.DB.prepare(`DELETE FROM IntentosLogin WHERE Usuario = ?`).bind(`cliente:${correo}`),
+    ]);
+
+    return c.json({ success: true, message: 'Contraseña reiniciada' });
+  } catch (error: any) {
+    console.error('cuenta.reiniciar', error?.message);
+    return c.json({ success: false, message: 'No se pudo reiniciar' }, 500);
   }
 });
 
