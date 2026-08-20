@@ -37,7 +37,13 @@ export async function leerTokenCliente(token: string, secreto?: string) {
       issuer: EMISOR,
       audience: PUBLICO,
     });
-    return { clienteId: Number(payload.clienteId), correo: String(payload.correo) };
+    return {
+      clienteId: Number(payload.clienteId),
+      correo: String(payload.correo),
+      // Cuándo se firmó, en segundos UTC. Sirve para dejar fuera las sesiones
+      // anteriores a un cambio de contraseña (Clientes.SesionesDesde).
+      emitido: Number(payload.iat ?? 0),
+    };
   } catch {
     return null;
   }

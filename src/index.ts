@@ -12,6 +12,7 @@ import { inventarioRouter } from './routes/inventario';
 import { pushRouter } from './routes/push';
 import { whatsappRouter } from './routes/whatsapp';
 import { expireUnverifiedSinpe } from './lib/expireOrders';
+import { limpiarTokens } from './lib/tokensCuenta';
 import { respaldosRouter } from './routes/respaldos';
 import { reportesRouter } from './routes/reportes';
 import { visitasRouter } from './routes/visitas';
@@ -88,6 +89,14 @@ export default {
         // Nunca se relanza: que falle la caducidad no puede tumbar el respaldo
         // ni marcar el Worker como caído.
         .catch((error: any) => console.error('expire.sinpe.error', error?.message))
+    );
+
+    // Enlaces de confirmación y de contraseña ya vencidos. No corre prisa: si
+    // una vuelta falla, la siguiente barre lo mismo.
+    ctx.waitUntil(
+      limpiarTokens(env.DB).catch((error: any) =>
+        console.error('tokens.limpieza.error', error?.message)
+      )
     );
   },
 };
