@@ -8,6 +8,7 @@ import {
   revisarClave,
   tokenCliente,
 } from '../lib/cuentas';
+import { dentroDelLimite } from '../lib/limite';
 
 type Bindings = {
   DB: D1Database;
@@ -91,6 +92,15 @@ async function anotarIntento(db: D1Database, correo: string, ip: string, exito: 
  * así quien ya compró no tiene que volver a escribirlos.
  */
 cuentaRouter.post('/registro', async (c) => {
+  // Entrar ya está protegido por intento fallido; registrarse no lo estaba, y
+  // cada registro cuesta un hash PBKDF2 y una fila nueva.
+  if (!(await dentroDelLimite((c.env as any).LIMITE_CLAVES, `registro:${ipDe(c)}`))) {
+    return c.json(
+      { success: false, message: 'Demasiados intentos seguidos. Esperá un minuto.' },
+      429
+    );
+  }
+
   let body: any;
   try {
     body = await c.req.json();

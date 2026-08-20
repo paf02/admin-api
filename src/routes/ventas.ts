@@ -13,6 +13,7 @@ import { buildOrderCreated, publish } from '../lib/events';
 import { shippingFor } from '../lib/shipping';
 import { avisarAlCliente } from '../lib/notifyCustomer';
 import { avisarPorCorreo } from '../lib/avisoCorreo';
+import { dentroDelLimite, ipDe } from '../lib/limite';
 import {
   buscarCandidatos,
   montoDelMensaje,
@@ -360,6 +361,18 @@ ventasRouter.get('/:id/cliente', ...admin, async (c) => {
  * vuelven a tocarlo.
  */
 ventasRouter.post('/', async (c) => {
+  // Antes de leer nada: cada pedido descuenta existencias y manda un correo,
+  // así que el tope va antes del trabajo, no después.
+  if (!(await dentroDelLimite((c.env as any).LIMITE_PEDIDOS, `pedidos:${ipDe(c)}`))) {
+    return c.json(
+      {
+        success: false,
+        message: 'Demasiados pedidos seguidos. Esperá un minuto y volvé a intentarlo.',
+      },
+      429
+    );
+  }
+
   let body: any;
   try {
     body = await c.req.json();

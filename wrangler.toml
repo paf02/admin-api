@@ -17,6 +17,24 @@ database_id = "a8b78cf5-63e1-4879-aa91-3eaf42a618b0"
 [vars]
 ALLOWED_ORIGINS = "*"
 
+# ── Topes por IP ──────────────────────────────────────────────────────
+# Crear un pedido es público y descuenta existencias, así que sin tope un
+# script deja el inventario en cero. El conteo lo lleva Cloudflare; no toca
+# la base. `period` solo admite 10 o 60 segundos.
+#
+# Cinco pedidos por minuto desde una misma IP: quien compra hace uno, y deja
+# margen para una familia o una oficina que salen por la misma salida.
+[[ratelimits]]
+name = "LIMITE_PEDIDOS"
+namespace_id = "1001"
+simple = { limit = 5, period = 60 }
+
+# Registros de cuenta: cada uno cuesta un hash y una fila.
+[[ratelimits]]
+name = "LIMITE_CLAVES"
+namespace_id = "1002"
+simple = { limit = 5, period = 60 }
+
 # Estela Pura runs the same code against its own database, so the two
 # storefronts can never see each other's products.
 #   deploy with: npx wrangler deploy --env estelapura
@@ -60,6 +78,20 @@ SINPE_PROPIO = "87309445"
 # CORREO_REMITENTE debe ser una dirección de un dominio verificado en el
 # proveedor; si no, los correos se rechazan o caen en spam.
 # CORREO_REMITENTE = "Estela Pura <pedidos@estelapuracr.com>"
+
+# Los mismos topes que el entorno de arriba: un entorno no hereda los bindings
+# del otro. Van después de las vars porque una tabla TOML se cierra sola: si se
+# ponen en medio, las claves que siguen dejan de ser vars y el Worker se
+# despliega sin ellas.
+[[env.estelapura.ratelimits]]
+name = "LIMITE_PEDIDOS"
+namespace_id = "1001"
+simple = { limit = 5, period = 60 }
+
+[[env.estelapura.ratelimits]]
+name = "LIMITE_CLAVES"
+namespace_id = "1002"
+simple = { limit = 5, period = 60 }
 
 # Respaldo diario a la 1:00 a. m. de Costa Rica (07:00 UTC)
 [env.estelapura.triggers]
