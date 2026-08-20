@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { authRouter } from './routes/auth';
 import { productsRouter } from './routes/productos';
+import { fraganciasRouter } from './routes/fragancias';
+import { fotosRouter } from './routes/fotos';
 import { categoriasRouter } from './routes/categorias';
 import { marcasRouter } from './routes/marcas';
 import { ventasRouter } from './routes/ventas';
@@ -46,6 +48,8 @@ app.get('/', (c) => {
 // API Routes
 app.route('/api/auth', authRouter);
 app.route('/api/productos', productsRouter);
+app.route('/api/fragancias', fraganciasRouter);
+app.route('/api/fotos', fotosRouter);
 app.route('/api/categorias', categoriasRouter);
 app.route('/api/marcas', marcasRouter);
 app.route('/api/ventas', ventasRouter);
