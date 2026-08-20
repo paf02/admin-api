@@ -30,6 +30,8 @@ export type CustomerNotifyEnv = WhatsAppEnv & {
   WA_TPL_LISTO?: string;
   WA_TPL_ENVIADO?: string;
   WA_TPL_ENTREGADO?: string;
+  /** Plantilla genérica: se usa cuando no hay una específica para el momento. */
+  WA_TPL_PEDIDO?: string;
   WHATSAPP_TEMPLATE_LANG?: string;
   /** Base pública para el enlace de seguimiento. */
   SITE_URL?: string;
@@ -49,8 +51,13 @@ const PLANTILLA: Record<CustomerEvent, keyof CustomerNotifyEnv> = {
   entregado: 'WA_TPL_ENTREGADO',
 };
 
+/**
+ * Redactado para encajar en una sola frase: «Tu pedido {{1}} ahora está {{2}}».
+ * Así una plantilla genérica sirve para los cuatro momentos y no hay que
+ * pedirle cuatro aprobaciones a Meta.
+ */
 const ESTADO_LEGIBLE: Record<CustomerEvent, string> = {
-  pago: 'pago confirmado',
+  pago: 'con el pago confirmado',
   listo: 'listo',
   enviado: 'en camino',
   entregado: 'entregado',
@@ -94,7 +101,8 @@ export async function avisarAlCliente(
     const destino = aInternacional(pedido.Telefono);
     if (!numero || !destino) return;
 
-    const plantilla = env[PLANTILLA[evento]] as string | undefined;
+    // La específica manda; si no hay, la genérica.
+    const plantilla = (env[PLANTILLA[evento]] as string | undefined) || env.WA_TPL_PEDIDO;
 
     if (plantilla) {
       // {{1}} número de pedido · {{2}} estado en palabras
