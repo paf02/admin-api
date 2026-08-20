@@ -28,6 +28,12 @@ const admin = [authMiddleware, adminMiddleware] as const;
 
 const usuarioDe = (c: any) => c.get('user')?.username ?? null;
 
+/**
+ * Clave de seguimiento del pedido: aleatoria, no derivable del número.
+ * Va en el enlace que recibe el cliente y es lo único que autoriza a verlo.
+ */
+const claveConsulta = () => crypto.randomUUID().replace(/-/g, '').slice(0, 18);
+
 /* ------------------------------------------------------------------ *
  * Lectura
  * ------------------------------------------------------------------ */
@@ -122,6 +128,73 @@ ventasRouter.get('/resumen', ...admin, async (c) => {
  * Detalle. Antes esta ruta era pública: cualquiera podía recorrer los IDs y
  * leer nombre, teléfono y dirección de todos los pedidos.
  */
+/**
+ * Seguimiento público del pedido: /ventas/consulta/:numero?c=<clave>
+ *
+ * Un pedido vive en el navegador que lo hizo, así que quien limpie el
+ * historial o cambie de teléfono se queda sin forma de ver en qué va lo suyo.
+ * Con el enlace puede, desde donde sea.
+ *
+ * La clave es lo que autoriza, no el número: los números son correlativos
+ * (EP-000001, EP-000002…) y sin clave cualquiera leería pedidos ajenos
+ * probando el siguiente. La respuesta es idéntica cuando el pedido no existe
+ * y cuando la clave no coincide, para que tampoco se pueda averiguar cuáles
+ * existen.
+ *
+ * Devuelve lo justo para saber en qué va —estado, productos, totales—: sin
+ * dirección exacta, sin correo, sin teléfono y sin quién lo atendió.
+ */
+ventasRouter.get('/consulta/:numero', async (c) => {
+  const numero = String(c.req.param('numero') ?? '').trim().toUpperCase();
+  const clave = String(c.req.query('c') ?? '').trim();
+
+  const noEncontrado = () =>
+    c.json({ success: false, message: 'No encontramos ese pedido.' }, 404);
+
+  if (!numero || !clave) return noEncontrado();
+
+  try {
+    const venta = await c.env.DB.prepare(
+      `SELECT VentaID, NumeroPedido, Fecha, Cliente, Consulta,
+              MetodoPago, EstadoPago, EstadoVenta,
+              MetodoEntrega, CostoEnvio, EnvioPorConfirmar, Total
+         FROM Ventas
+        WHERE NumeroPedido = ?`
+    ).bind(numero).first<any>();
+
+    if (!venta || !venta.Consulta || venta.Consulta !== clave) return noEncontrado();
+
+    const { results: detalles } = await c.env.DB.prepare(
+      `SELECT COALESCE(d.NombreProducto, p.Nombre) AS NombreProducto,
+              d.Cantidad, d.Precio, d.SubTotal
+         FROM DetalleVenta d
+         LEFT JOIN Productos p ON p.ProductoID = d.ProductoID
+        WHERE d.VentaID = ?
+        ORDER BY d.DetalleID`
+    ).bind(venta.VentaID).all();
+
+    return c.json({
+      success: true,
+      data: {
+        NumeroPedido: venta.NumeroPedido,
+        Fecha: venta.Fecha,
+        Nombre: venta.Cliente,
+        EstadoVenta: venta.EstadoVenta,
+        EstadoPago: venta.EstadoPago,
+        MetodoPago: venta.MetodoPago,
+        MetodoEntrega: venta.MetodoEntrega,
+        CostoEnvio: venta.CostoEnvio,
+        EnvioPorConfirmar: venta.EnvioPorConfirmar,
+        Total: venta.Total,
+        detalles,
+      },
+    });
+  } catch (error: any) {
+    console.error('ventas.consulta', error?.message);
+    return c.json({ success: false, message: 'No pudimos consultar el pedido.' }, 500);
+  }
+});
+
 ventasRouter.get('/:id', ...admin, async (c) => {
   const id = c.req.param('id');
 
@@ -348,14 +421,19 @@ ventasRouter.post('/', async (c) => {
   }
 
   try {
+    // Clave del enlace de seguimiento. Se genera una sola vez y se usa tanto
+    // al guardar como en la respuesta: si se generara dos veces, el enlace que
+    // recibe el cliente no abriría su propio pedido.
+    const consulta = claveConsulta();
+
     const insert = await c.env.DB.prepare(`
       INSERT INTO Ventas (
         Cliente, Telefono, Email,
         Provincia, Canton, Distrito, DireccionExacta, Waze,
         MetodoEntrega, CostoEnvio, EnvioPorConfirmar,
         MetodoPago, EstadoPago,
-        EstadoVenta, Observacion, Total
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendiente', ?, ?)
+        EstadoVenta, Observacion, Total, Consulta
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendiente', ?, ?, ?)
     `).bind(
       cliente,
       body.Telefono ?? null,
@@ -371,7 +449,8 @@ ventasRouter.post('/', async (c) => {
       metodoPago,
       initialPaymentStatus(metodoPago),
       body.Observacion ?? null,
-      total
+      total,
+      consulta
     ).run();
 
     const ventaId = Number(insert.meta.last_row_id);
@@ -379,7 +458,10 @@ ventasRouter.post('/', async (c) => {
 
     // Las existencias ya se apartaron arriba; acá solo queda dejar constancia.
     const statements = [
-      c.env.DB.prepare(`UPDATE Ventas SET NumeroPedido = ? WHERE VentaID = ?`).bind(numero, ventaId),
+      c.env.DB.prepare(`UPDATE Ventas SET NumeroPedido = ? WHERE VentaID = ?`).bind(
+        numero,
+        ventaId
+      ),
       ...detalles.flatMap((d) => {
         const anterior = Number(porId.get(d.id)?.Stock) || 0;
         return [
@@ -422,7 +504,11 @@ ventasRouter.post('/', async (c) => {
     }
 
     return c.json(
-      { success: true, message: 'Pedido registrado', data: { VentaID: ventaId, NumeroPedido: numero, Total: total } },
+      {
+        success: true,
+        message: 'Pedido registrado',
+        data: { VentaID: ventaId, NumeroPedido: numero, Total: total, Consulta: consulta },
+      },
       201
     );
   } catch (error: any) {
