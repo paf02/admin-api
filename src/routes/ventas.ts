@@ -15,6 +15,7 @@ import { avisarAlCliente } from '../lib/notifyCustomer';
 import {
   buscarCandidatos,
   montoDelMensaje,
+  nombreDelMensaje,
   referenciaDelMensaje,
   telefonoDelMensaje,
 } from '../lib/sinpe';
@@ -171,15 +172,19 @@ ventasRouter.post('/sinpe/sugerencia', ...admin, async (c) => {
   }
 
   try {
-    const telefono = telefonoDelMensaje(String(texto ?? ''));
+    // SINPE_PROPIO es el número de la tienda: los avisos lo incluyen como
+    // cuenta receptora y confundirlo con el del cliente arruina el cotejo.
+    const telefono = telefonoDelMensaje(String(texto ?? ''), (c.env as any).SINPE_PROPIO);
+    const nombre = nombreDelMensaje(String(texto ?? ''));
     const referencia = referenciaDelMensaje(String(texto ?? ''));
-    const candidatos = await buscarCandidatos(c.env.DB, monto, telefono);
+    const candidatos = await buscarCandidatos(c.env.DB, monto, telefono, nombre);
 
     return c.json({
       success: true,
       data: {
         monto,
         telefono,
+        nombre,
         referencia,
         candidatos,
         // Sin candidatos no siempre es un error: puede ser un pago que no

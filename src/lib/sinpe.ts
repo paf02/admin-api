@@ -84,12 +84,41 @@ export function referenciaDelMensaje(texto: string): string | null {
   return larga ? larga[1] : null;
 }
 
-/** Últimos 8 dígitos de cualquier teléfono que aparezca en el mensaje. */
-export function telefonoDelMensaje(texto: string): string | null {
+/**
+ * Teléfono de quien envió, si el aviso lo trae.
+ *
+ * Ojo: varios bancos incluyen la cuenta que RECIBE, no la que envía. El BN
+ * escribe «JD-87309445», que es el número de la propia tienda. Si eso se
+ * tomara como el teléfono del cliente, «coincide el teléfono» nunca calzaría
+ * —o peor, calzaría con quien no es—. Por eso el número propio se descarta.
+ */
+export function telefonoDelMensaje(texto: string, propio?: string | null): string | null {
+  const mio = String(propio ?? '').replace(/\D/g, '').slice(-8);
+
   const candidatos = [...String(texto || '').matchAll(/\b(?:\+?506[\s-]?)?([6-8]\d{3})[\s-]?(\d{4})\b/g)]
-    .map((m) => `${m[1]}${m[2]}`);
+    .map((m) => `${m[1]}${m[2]}`)
+    .filter((n) => !mio || n !== mio);
+
   return candidatos.length ? candidatos[candidatos.length - 1] : null;
 }
+
+/**
+ * Nombre de quien envió. Es el único dato del remitente que trae el aviso del
+ * BN, así que sirve para desempatar cuando varios pedidos comparten monto.
+ */
+export function nombreDelMensaje(texto: string): string | null {
+  const encontrado = String(texto || '').match(/\bde\s+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]{4,60}?)\s*[.,]/);
+  return encontrado ? encontrado[1].trim() : null;
+}
+
+/** Palabras de un nombre, sin conectores ni tildes, para comparar. */
+const palabras = (nombre: string) =>
+  nombre
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((p) => p.length > 2 && !['de', 'la', 'del', 'los'].includes(p));
 
 /**
  * Busca pedidos que calcen con el monto.
@@ -102,6 +131,7 @@ export async function buscarCandidatos(
   db: D1Database,
   monto: number,
   telefono: string | null,
+  nombre: string | null = null,
   horas = 72
 ): Promise<Candidato[]> {
   const { results } = await db
@@ -123,10 +153,24 @@ export async function buscarCandidatos(
 
   const orden = { alta: 0, media: 1, baja: 2 };
 
+  // El BN no manda el teléfono de quien envía, solo el nombre. Comparar por
+  // nombre desempata cuando varios pedidos comparten monto: se exige que
+  // coincidan dos palabras (nombre y apellido), porque solo «Luis» calzaría
+  // con demasiada gente.
+  const delRemitente = nombre ? palabras(nombre) : [];
+  const coincideNombre = (c: { Cliente: string }) => {
+    if (delRemitente.length < 2) return false;
+    const suyas = palabras(c.Cliente || '');
+    return suyas.filter((p) => delRemitente.includes(p)).length >= 2;
+  };
+
   return results.map((c) => {
     // Monto exacto + teléfono del remitente = no hay duda razonable.
     if (coincideTelefono(c)) {
       return { ...c, confianza: 'alta' as const, motivo: 'Monto y teléfono coinciden' };
+    }
+    if (coincideNombre(c)) {
+      return { ...c, confianza: 'alta' as const, motivo: 'Monto y nombre coinciden' };
     }
     // Un solo pedido esperando ese monto exacto: casi seguro, pero sin el
     // teléfono no se puede descartar del todo.
