@@ -84,6 +84,122 @@ productsRouter.put('/:id', authMiddleware, adminMiddleware, async (c) => {
   return c.json({ success: true, message: 'Producto actualizado exitosamente' });
 });
 
+/**
+ * Editar un producto ya publicado.
+ *
+ * Solo toca lo que venga en el cuerpo, para poder cambiar únicamente el
+ * precio sin tener que reenviar el resto y arriesgarse a borrarlo.
+ *
+ * Las existencias quedan fuera a propósito: se ajustan en su propia pantalla,
+ * que registra el movimiento y su motivo. Cambiarlas por acá dejaría el
+ * inventario cuadrado pero sin explicación de por qué cambió.
+ */
+productsRouter.patch('/:id', authMiddleware, adminMiddleware, async (c) => {
+  const id = Number(c.req.param('id'));
+  const body = await c.req.json().catch(() => ({} as any));
+
+  const actual = await c.env.DB.prepare(
+    `SELECT ProductoID, Nombre, CategoriaID FROM Productos WHERE ProductoID = ?`
+  )
+    .bind(id)
+    .first<{ ProductoID: number; Nombre: string; CategoriaID: number }>();
+
+  if (!actual) return c.json({ success: false, message: 'No existe ese producto' }, 404);
+
+  const campos: string[] = [];
+  const valores: unknown[] = [];
+
+  const texto = (v: unknown) => String(v ?? '').trim();
+  const poner = (columna: string, valor: unknown) => {
+    campos.push(`${columna} = ?`);
+    valores.push(valor);
+  };
+
+  // El nombre se maneja aparte: renombrar la botella obliga a renombrar sus
+  // decants (más abajo), porque la tienda los agrupa por el nombre base.
+  const nombre = texto(body.nombre);
+  const renombra = nombre && nombre !== actual.Nombre;
+
+  if (renombra) {
+    const chocado = await c.env.DB.prepare(
+      `SELECT ProductoID FROM Productos WHERE lower(Nombre) = lower(?) AND ProductoID <> ?`
+    )
+      .bind(nombre, id)
+      .first();
+
+    if (chocado) {
+      return c.json({ success: false, message: `Ya hay otro producto llamado «${nombre}».` }, 409);
+    }
+    poner('Nombre', nombre);
+  }
+
+  if (body.precioVenta !== undefined) {
+    const precio = Number(body.precioVenta);
+    if (!Number.isFinite(precio) || precio <= 0) {
+      return c.json({ success: false, message: 'El precio de venta no es válido' }, 400);
+    }
+    poner('PrecioVenta', precio);
+  }
+
+  if (body.precioCompra !== undefined) {
+    const costo = Number(body.precioCompra);
+    if (!Number.isFinite(costo) || costo < 0) {
+      return c.json({ success: false, message: 'El costo no es válido' }, 400);
+    }
+    poner('PrecioCompra', costo);
+  }
+
+  if (body.imagenUrl !== undefined) poner('ImagenURL', texto(body.imagenUrl) || null);
+  if (body.familia !== undefined) poner('Familia', texto(body.familia) || null);
+  if (body.notasSalida !== undefined) poner('NotasSalida', texto(body.notasSalida) || null);
+  if (body.notasCorazon !== undefined) poner('NotasCorazon', texto(body.notasCorazon) || null);
+  if (body.notasFondo !== undefined) poner('NotasFondo', texto(body.notasFondo) || null);
+
+  // Estado 0 lo saca de la tienda sin borrarlo: los pedidos viejos siguen
+  // mostrando qué se vendió.
+  if (body.activo !== undefined) poner('Estado', body.activo ? 1 : 0);
+
+  if (!campos.length) return c.json({ success: false, message: 'No hay nada que cambiar' }, 400);
+
+  try {
+    const sentencias = [
+      c.env.DB.prepare(`UPDATE Productos SET ${campos.join(', ')} WHERE ProductoID = ?`).bind(
+        ...valores,
+        id
+      ),
+    ];
+
+    // Si se renombró una botella sellada, sus decants tienen que seguirla: el
+    // decant se llama «<nombre de la botella> — Decant Nml», y si el nombre
+    // base deja de coincidir, la tienda los muestra como fragancias sueltas.
+    if (renombra) {
+      sentencias.push(
+        c.env.DB.prepare(
+          `UPDATE Productos
+              SET Nombre = ? || substr(Nombre, ?)
+            WHERE Nombre LIKE ? || ' — Decant%'`
+        ).bind(nombre, actual.Nombre.length + 1, actual.Nombre)
+      );
+    }
+
+    // La imagen también: los decants muestran la foto de su botella.
+    if (body.imagenUrl !== undefined) {
+      sentencias.push(
+        c.env.DB.prepare(
+          `UPDATE Productos SET ImagenURL = ? WHERE Nombre LIKE ? || ' — Decant%'`
+        ).bind(texto(body.imagenUrl) || null, renombra ? nombre : actual.Nombre)
+      );
+    }
+
+    await c.env.DB.batch(sentencias);
+
+    return c.json({ success: true, message: 'Producto actualizado' });
+  } catch (error: any) {
+    console.error('productos.editar', error?.message);
+    return c.json({ success: false, message: 'No se pudo guardar el cambio' }, 500);
+  }
+});
+
 // Delete product (admin only - soft delete)
 productsRouter.delete('/:id', authMiddleware, adminMiddleware, async (c) => {
   const id = c.req.param('id');
