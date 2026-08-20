@@ -11,6 +11,7 @@ import {
 } from '../lib/orders';
 import { buildOrderCreated, publish } from '../lib/events';
 import { shippingFor } from '../lib/shipping';
+import { avisarAlCliente } from '../lib/notifyCustomer';
 import {
   deductStatement,
   movementStatement,
@@ -549,9 +550,11 @@ ventasRouter.patch('/:id/estado', ...admin, async (c) => {
     );
   }
 
-  const venta = await c.env.DB.prepare(`SELECT EstadoVenta FROM Ventas WHERE VentaID = ?`)
+  const venta = await c.env.DB.prepare(
+    `SELECT EstadoVenta, NumeroPedido, Telefono, Consulta FROM Ventas WHERE VentaID = ?`
+  )
     .bind(id)
-    .first<{ EstadoVenta: string }>();
+    .first<{ EstadoVenta: string; NumeroPedido: string | null; Telefono: string | null; Consulta: string | null }>();
 
   if (!venta) return c.json({ success: false, message: 'Pedido no encontrado' }, 404);
   if (venta.EstadoVenta === estado) {
@@ -569,6 +572,19 @@ ventasRouter.patch('/:id/estado', ...admin, async (c) => {
       c.env.DB.prepare(`UPDATE Ventas SET EstadoVenta = ? WHERE VentaID = ?`).bind(estado, id),
       historyStatement(c.env.DB, id, 'Estado', `${venta.EstadoVenta} → ${estado}`, usuarioDe(c)),
     ]);
+
+    // Avisar al cliente solo cuando el cambio le dice algo. Pasar de
+    // 'Pendiente' a 'Confirmado' es movimiento interno; que su pedido esté
+    // listo o vaya en camino, no.
+    const aviso =
+      estado === 'Listo' ? 'listo' : estado === 'Enviado' ? 'enviado' : estado === 'Entregado' ? 'entregado' : null;
+
+    if (aviso) {
+      // En segundo plano: la respuesta al panel no espera a WhatsApp.
+      const envio = avisarAlCliente(c.env as any, aviso, venta);
+      if (c.executionCtx?.waitUntil) c.executionCtx.waitUntil(envio);
+    }
+
     return c.json({ success: true, data: { EstadoVenta: estado } });
   } catch (error: any) {
     console.error('ventas.estado', error?.message);
@@ -588,8 +604,14 @@ ventasRouter.patch('/:id/pago', ...admin, async (c) => {
   }
 
   const venta = await c.env.DB.prepare(
-    `SELECT EstadoPago, MetodoPago FROM Ventas WHERE VentaID = ?`
-  ).bind(id).first<{ EstadoPago: string; MetodoPago: string }>();
+    `SELECT EstadoPago, MetodoPago, NumeroPedido, Telefono, Consulta FROM Ventas WHERE VentaID = ?`
+  ).bind(id).first<{
+    EstadoPago: string;
+    MetodoPago: string;
+    NumeroPedido: string | null;
+    Telefono: string | null;
+    Consulta: string | null;
+  }>();
 
   if (!venta) return c.json({ success: false, message: 'Pedido no encontrado' }, 404);
 
@@ -608,6 +630,14 @@ ventasRouter.patch('/:id/pago', ...admin, async (c) => {
       `).bind(estadoPago, referencia ?? null, verificado ? 1 : 0, verificado ? 1 : 0, usuario, id),
       historyStatement(c.env.DB, id, 'Pago', `${venta.EstadoPago} → ${estadoPago}`, usuario),
     ]);
+
+    // Confirmar el pago es lo que más tranquiliza a quien mandó un SINPE y se
+    // quedó esperando. Solo al pasar a pagado, no en cada corrección.
+    if (verificado && venta.EstadoPago !== 'Pagado') {
+      const envio = avisarAlCliente(c.env as any, 'pago', venta);
+      if (c.executionCtx?.waitUntil) c.executionCtx.waitUntil(envio);
+    }
+
     return c.json({ success: true, data: { EstadoPago: estadoPago } });
   } catch (error: any) {
     console.error('ventas.pago', error?.message);
