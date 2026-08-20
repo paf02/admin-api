@@ -50,6 +50,17 @@ VAPID_SUBJECT = "mailto:pedidos@estelapuracr.com"
 # recibe; sin esto se confundiría con el teléfono de quien envía.
 SINPE_PROPIO = "87309445"
 
+# ── Correo al cliente ─────────────────────────────────────────────────
+# Avisos de pedido: comprobante al crearlo, pago confirmado, listo, en camino,
+# entregado y cancelado por falta de pago. Sin clave configurada no se envía
+# nada y todo lo demás sigue funcionando igual.
+#
+#   npx wrangler secret put RESEND_API_KEY --env estelapura
+#
+# CORREO_REMITENTE debe ser una dirección de un dominio verificado en el
+# proveedor; si no, los correos se rechazan o caen en spam.
+# CORREO_REMITENTE = "Estela Pura <pedidos@estelapuracr.com>"
+
 # Respaldo diario a la 1:00 a. m. de Costa Rica (07:00 UTC)
 [env.estelapura.triggers]
 # 07:00 UTC = respaldo diario · cada hora = caducidad de SINPE sin verificar

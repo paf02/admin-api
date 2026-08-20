@@ -16,8 +16,9 @@
  */
 
 import { canPush, sendPush, type VapidEnv } from './push';
+import { avisarPorCorreo, type AvisoCorreoEnv } from './avisoCorreo';
 
-export type NotifyEnv = VapidEnv & {
+export type NotifyEnv = VapidEnv & AvisoCorreoEnv & {
   /** Base de datos: de acá salen los dispositivos suscritos al panel. */
   DB?: D1Database;
   /** Token permanente de la app de WhatsApp Business (secret). */
@@ -268,6 +269,10 @@ export async function publish(event: OrderCreatedEvent, env?: NotifyEnv): Promis
       console.error('push.error', d.orderNumber, error?.message)
     )
   );
+
+  // Al cliente: el comprobante con su enlace de seguimiento. Es el correo que
+  // más se espera, y el que evita el «¿me llegó el pedido?» de la primera hora.
+  canales.push(avisarPorCorreo(env, 'creado', d.orderId));
 
   await Promise.allSettled(canales);
 }

@@ -81,7 +81,7 @@ export default {
     // La caducidad corre cada hora: las existencias de un SINPE abandonado
     // deben volver a la tienda sin esperar al respaldo del día siguiente.
     ctx.waitUntil(
-      expireUnverifiedSinpe(env.DB)
+      expireUnverifiedSinpe(env.DB, undefined, env as any)
         .then((r) => {
           if (r.revisados > 0) console.log('expire.sinpe', JSON.stringify(r));
         })

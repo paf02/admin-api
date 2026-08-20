@@ -1,4 +1,5 @@
 import { canSend, sendTemplate, sendText, type WhatsAppEnv } from './whatsapp';
+import { avisarPorCorreo, type AvisoCorreoEnv } from './avisoCorreo';
 
 /**
  * Avisos al cliente por WhatsApp.
@@ -24,7 +25,7 @@ import { canSend, sendTemplate, sendText, type WhatsAppEnv } from './whatsapp';
  * en el log. El pedido nunca se ve afectado.
  */
 
-export type CustomerNotifyEnv = WhatsAppEnv & {
+export type CustomerNotifyEnv = WhatsAppEnv & AvisoCorreoEnv & {
   /** Plantillas aprobadas, una por momento. */
   WA_TPL_PAGO?: string;
   WA_TPL_LISTO?: string;
@@ -89,7 +90,7 @@ export type PedidoAviso = {
  * Manda el aviso. Nunca lanza: un cambio de estado no puede fallar porque
  * WhatsApp esté caído, y el panel sigue siendo la verdad del pedido.
  */
-export async function avisarAlCliente(
+async function avisarPorWhatsApp(
   env: CustomerNotifyEnv,
   evento: CustomerEvent,
   pedido: PedidoAviso
@@ -133,4 +134,22 @@ export async function avisarAlCliente(
   } catch (error: any) {
     console.error('avisoCliente.error', evento, error?.message);
   }
+}
+
+/**
+ * Avisa al cliente por los canales que estén configurados.
+ *
+ * Los dos son independientes a propósito: que WhatsApp no esté configurado no
+ * puede dejar sin correo a nadie, y al revés igual. Ninguno lanza, así que el
+ * cambio de estado que los disparó nunca se ve afectado.
+ */
+export async function avisarAlCliente(
+  env: CustomerNotifyEnv,
+  evento: CustomerEvent,
+  pedido: PedidoAviso
+): Promise<void> {
+  await Promise.allSettled([
+    avisarPorWhatsApp(env, evento, pedido),
+    pedido.NumeroPedido ? avisarPorCorreo(env, evento, pedido.NumeroPedido) : Promise.resolve(),
+  ]);
 }

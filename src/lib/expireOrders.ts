@@ -1,4 +1,5 @@
 import { historyStatement } from './orders';
+import { avisarPorCorreo, type AvisoCorreoEnv } from './avisoCorreo';
 import { movementStatement, restoreStatement } from './inventory';
 
 /**
@@ -37,7 +38,10 @@ type Expirable = {
 
 export async function expireUnverifiedSinpe(
   db: D1Database,
-  hours: number = SINPE_EXPIRY_HOURS
+  hours: number = SINPE_EXPIRY_HOURS,
+  // Opcional: con él se le avisa por correo a quien se quedó sin pedido.
+  // Sin él, la caducidad funciona igual que siempre.
+  env?: AvisoCorreoEnv
 ): Promise<{ revisados: number; cancelados: number; errores: number }> {
   const { results: vencidos } = await db
     .prepare(
@@ -111,6 +115,10 @@ export async function expireUnverifiedSinpe(
 
       await db.batch(statements);
       cancelados += 1;
+
+      // Que no se entere por sorpresa: el pedido se canceló solo y su
+      // dinero, si lo mandó, no llegó a verificarse.
+      if (env) await avisarPorCorreo({ ...env, DB: db }, 'cancelado', venta.VentaID);
     } catch (error: any) {
       // Un pedido que falla no debe detener a los demás.
       console.error('expire.venta', venta.VentaID, error?.message);
