@@ -12,6 +12,7 @@ import {
 import { buildOrderCreated, publish } from '../lib/events';
 import { shippingFor } from '../lib/shipping';
 import { avisarAlCliente } from '../lib/notifyCustomer';
+import { buscarCandidatos, montoDelMensaje, telefonoDelMensaje } from '../lib/sinpe';
 import {
   deductStatement,
   movementStatement,
@@ -145,6 +146,48 @@ ventasRouter.get('/resumen', ...admin, async (c) => {
  * Devuelve lo justo para saber en qué va —estado, productos, totales—: sin
  * dirección exacta, sin correo, sin teléfono y sin quién lo atendió.
  */
+/**
+ * Propone a qué pedido corresponde un SINPE.
+ *
+ * Recibe el mensaje del banco tal cual llega —pegado a mano o reenviado
+ * automáticamente— y devuelve los pedidos que calzan. No marca nada: la
+ * confirmación sigue siendo un toque humano, porque cobrarle a la persona
+ * equivocada significa entregar un perfume que nadie pagó.
+ */
+ventasRouter.post('/sinpe/sugerencia', ...admin, async (c) => {
+  const { texto } = await c.req.json().catch(() => ({} as any));
+
+  const monto = montoDelMensaje(String(texto ?? ''));
+  if (!monto) {
+    return c.json(
+      { success: false, message: 'No encontramos un monto en ese mensaje.' },
+      400
+    );
+  }
+
+  try {
+    const telefono = telefonoDelMensaje(String(texto ?? ''));
+    const candidatos = await buscarCandidatos(c.env.DB, monto, telefono);
+
+    return c.json({
+      success: true,
+      data: {
+        monto,
+        telefono,
+        candidatos,
+        // Sin candidatos no siempre es un error: puede ser un pago que no
+        // corresponde a ningún pedido, o un monto que ya se verificó.
+        mensaje: candidatos.length
+          ? null
+          : 'Ningún pedido pendiente calza con ese monto. Puede que ya lo hayas verificado.',
+      },
+    });
+  } catch (error: any) {
+    console.error('ventas.sinpe', error?.message);
+    return c.json({ success: false, message: 'No pudimos revisar los pedidos.' }, 500);
+  }
+});
+
 ventasRouter.get('/consulta/:numero', async (c) => {
   const numero = String(c.req.param('numero') ?? '').trim().toUpperCase();
   const clave = String(c.req.query('c') ?? '').trim();
