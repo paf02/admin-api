@@ -12,6 +12,7 @@ import {
 import { buildOrderCreated, publish } from '../lib/events';
 import { shippingFor } from '../lib/shipping';
 import { avisarAlCliente } from '../lib/notifyCustomer';
+import { avisarPorCorreo } from '../lib/avisoCorreo';
 import {
   buscarCandidatos,
   montoDelMensaje,
@@ -765,6 +766,12 @@ ventasRouter.post('/:id/cancelar', ...admin, async (c) => {
         usuarioDe(c)
       ),
     ]);
+
+    // Que no se entere cuando pregunte: cancelar a mano avisa igual que la
+    // cancelación automática por SINPE sin verificar. Solo correo: 'cancelado'
+    // no tiene plantilla de WhatsApp aprobada.
+    const envio = avisarPorCorreo(c.env as any, 'cancelado', id);
+    if (c.executionCtx?.waitUntil) c.executionCtx.waitUntil(envio);
 
     return c.json({
       success: true,
