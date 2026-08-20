@@ -12,7 +12,12 @@ import {
 import { buildOrderCreated, publish } from '../lib/events';
 import { shippingFor } from '../lib/shipping';
 import { avisarAlCliente } from '../lib/notifyCustomer';
-import { buscarCandidatos, montoDelMensaje, telefonoDelMensaje } from '../lib/sinpe';
+import {
+  buscarCandidatos,
+  montoDelMensaje,
+  referenciaDelMensaje,
+  telefonoDelMensaje,
+} from '../lib/sinpe';
 import {
   deductStatement,
   movementStatement,
@@ -167,6 +172,7 @@ ventasRouter.post('/sinpe/sugerencia', ...admin, async (c) => {
 
   try {
     const telefono = telefonoDelMensaje(String(texto ?? ''));
+    const referencia = referenciaDelMensaje(String(texto ?? ''));
     const candidatos = await buscarCandidatos(c.env.DB, monto, telefono);
 
     return c.json({
@@ -174,6 +180,7 @@ ventasRouter.post('/sinpe/sugerencia', ...admin, async (c) => {
       data: {
         monto,
         telefono,
+        referencia,
         candidatos,
         // Sin candidatos no siempre es un error: puede ser un pago que no
         // corresponde a ningún pedido, o un monto que ya se verificó.

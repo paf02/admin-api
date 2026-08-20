@@ -67,6 +67,23 @@ function aNumero(crudo: string): number | null {
   return Number.isFinite(valor) && valor > 0 ? valor : null;
 }
 
+/**
+ * Referencia del banco, si el aviso la trae.
+ *
+ * El BN la manda como «Referencia 2026081915183010572088162». Guardarla en el
+ * pedido es lo que después permite cotejar contra el estado de cuenta sin
+ * adivinar cuál transferencia fue cuál.
+ */
+export function referenciaDelMensaje(texto: string): string | null {
+  const conEtiqueta = String(texto || '').match(/referencia\s*[:#]?\s*(\d{6,})/i);
+  if (conEtiqueta) return conEtiqueta[1];
+
+  // Sin la palabra «referencia», una tira larga de dígitos suele serlo; el
+  // monto y el teléfono ya se leyeron aparte y son más cortos.
+  const larga = String(texto || '').match(/\b(\d{15,})\b/);
+  return larga ? larga[1] : null;
+}
+
 /** Últimos 8 dígitos de cualquier teléfono que aparezca en el mensaje. */
 export function telefonoDelMensaje(texto: string): string | null {
   const candidatos = [...String(texto || '').matchAll(/\b(?:\+?506[\s-]?)?([6-8]\d{3})[\s-]?(\d{4})\b/g)]
